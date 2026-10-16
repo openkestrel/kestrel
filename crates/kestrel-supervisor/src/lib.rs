@@ -64,7 +64,6 @@ struct Supervising {
     summary: Option<Vec<link::WorkRepository>>,
     interrupt_deadline: Duration,
     quiet_period: Duration,
-    /// How `gh` and `git` reach the broker, for the clone and the harness alike.
     reaching: BTreeMap<String, String>,
 }
 
@@ -173,6 +172,10 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
             None
         }
     };
+    let reaching = broker.as_ref().map_or_else(
+        || broker::environment(None, variables),
+        |broker| broker.environment().clone(),
+    );
     let mut supervising = Supervising {
         cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
         carrying: None,
@@ -181,10 +184,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         summary: None,
         interrupt_deadline: interrupt_deadline(variables),
         quiet_period: quiet_period(variables),
-        reaching: broker
-            .as_ref()
-            .map(|broker| broker.environment().clone())
-            .unwrap_or_default(),
+        reaching,
     };
 
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link), carried_session));
@@ -1090,7 +1090,7 @@ fn give_up_after(variables: &BTreeMap<String, String>) -> Option<Duration> {
     Duration::from_secs(lease).checked_add(GIVE_UP_MARGIN)
 }
 
-fn set<'a>(variables: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+pub(crate) fn set<'a>(variables: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
     variables
         .get(name)
         .map(String::as_str)

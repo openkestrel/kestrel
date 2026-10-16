@@ -28,7 +28,7 @@ pub async fn check_out(
             format!("{repository} could not be checked out on the branch {branch}: {why}")
         };
 
-        reached(
+        git_reaching(
             reaching,
             &["clone", "--branch", base, repository, directory],
         )
@@ -312,8 +312,7 @@ async fn git(arguments: &[&str]) -> Result<String, String> {
     Ok(untrimmed(arguments).await?.trim().to_owned())
 }
 
-/// Asks the broker for a token when the remote wants one.
-async fn reached(
+async fn git_reaching(
     reaching: &BTreeMap<String, String>,
     arguments: &[&str],
 ) -> Result<String, String> {

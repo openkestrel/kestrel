@@ -1,6 +1,5 @@
-//! Lends a process about to reach GitHub a token for that one use, asked of the link as it asks
-//! (ADR-0028). `git` reaches it as a credential helper and `gh` through a shim; no token is
-//! written to a file or kept in an environment anything else inherits.
+//! No token this lends is written to a file or kept in an environment anything else inherits
+//! (ADR-0028).
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead as _, BufReader, Read, Write};
@@ -10,6 +9,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::link::{Lent, Link};
+use crate::set;
 
 /// The socket's path, which the helper and the shim are handed; it lends nothing by itself.
 pub const VARIABLE: &str = "KESTREL_BROKER";
@@ -39,17 +40,18 @@ pub struct Broker {
 }
 
 impl Broker {
-    /// Reachable only by this Instance's own user: the directory holding the socket is theirs
-    /// alone. `helper` is this binary, which `git` runs as its credential helper.
+    /// `helper` is this binary, which `git` runs as its credential helper.
     pub fn open(
         link: Arc<Link>,
         carried: watch::Receiver<Option<String>>,
         helper: &Path,
         inherited: &BTreeMap<String, String>,
     ) -> io::Result<Self> {
+        static OPENED: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "kestrel-broker-{}-{}",
+            "kestrel-broker-{}-{}-{}",
             std::process::id(),
+            OPENED.fetch_add(1, Ordering::Relaxed),
             jiff::Timestamp::now().subsec_nanosecond()
         ));
         std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
@@ -59,7 +61,7 @@ impl Broker {
         let serving = tokio::spawn(serving(listener, link, carried));
 
         Ok(Self {
-            environment: environment(helper, &socket, inherited),
+            environment: environment(Some((helper, &socket)), inherited),
             directory,
             serving,
         })
@@ -79,40 +81,36 @@ impl Drop for Broker {
     }
 }
 
-/// Appended after whatever configuration the Instance already passes in its environment, and
-/// clearing every credential helper before it so no other one answers in its place.
+/// Clears every credential helper, so with no broker `git` is lent nothing rather than answered
+/// by a helper already on the Instance.
 pub fn environment(
-    helper: &Path,
-    socket: &Path,
+    broker: Option<(&Path, &Path)>,
     inherited: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let first = inherited
         .get("GIT_CONFIG_COUNT")
         .and_then(|count| count.parse::<usize>().ok())
         .unwrap_or(0);
-    let helper = format!(
-        "!'{}' credential",
-        helper.to_string_lossy().replace('\'', r"'\''")
+    let mut entries = vec![("credential.helper".to_owned(), String::new())];
+    let mut environment = BTreeMap::new();
+    if let Some((helper, socket)) = broker {
+        entries.push((
+            "credential.helper".to_owned(),
+            format!(
+                "!'{}' credential",
+                helper.to_string_lossy().replace('\'', r"'\''")
+            ),
+        ));
+        entries.push(("credential.useHttpPath".to_owned(), "true".to_owned()));
+        environment.insert(VARIABLE.to_owned(), socket.to_string_lossy().into_owned());
+    }
+    environment.insert(
+        "GIT_CONFIG_COUNT".to_owned(),
+        (first + entries.len()).to_string(),
     );
-    let entries = [
-        ("credential.helper", ""),
-        ("credential.helper", helper.as_str()),
-        ("credential.useHttpPath", "true"),
-    ];
-
-    let mut environment = BTreeMap::from([
-        (VARIABLE.to_owned(), socket.to_string_lossy().into_owned()),
-        (
-            "GIT_CONFIG_COUNT".to_owned(),
-            (first + entries.len()).to_string(),
-        ),
-    ]);
     for (index, (key, value)) in entries.into_iter().enumerate() {
-        environment.insert(format!("GIT_CONFIG_KEY_{}", first + index), key.to_owned());
-        environment.insert(
-            format!("GIT_CONFIG_VALUE_{}", first + index),
-            value.to_owned(),
-        );
+        environment.insert(format!("GIT_CONFIG_KEY_{}", first + index), key);
+        environment.insert(format!("GIT_CONFIG_VALUE_{}", first + index), value);
     }
 
     environment
@@ -326,13 +324,6 @@ fn addressed(named: &str, host: &str) -> Option<String> {
     }
 }
 
-fn set<'a>(variables: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    variables
-        .get(name)
-        .map(String::as_str)
-        .filter(|value| !value.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,8 +389,10 @@ mod tests {
         let inherited = BTreeMap::from([("GIT_CONFIG_COUNT".to_owned(), "1".to_owned())]);
 
         let environment = environment(
-            Path::new("/usr/local/bin/it's-here"),
-            Path::new("/tmp/broker/socket"),
+            Some((
+                Path::new("/usr/local/bin/it's-here"),
+                Path::new("/tmp/broker/socket"),
+            )),
             &inherited,
         );
 
@@ -418,6 +411,21 @@ mod tests {
                     ),
                     ("GIT_CONFIG_KEY_3", "credential.useHttpPath"),
                     ("GIT_CONFIG_VALUE_3", "true"),
+                ]
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            )
+        );
+    }
+
+    #[test]
+    fn with_no_broker_git_is_still_left_no_other_helper_to_ask() {
+        assert_eq!(
+            environment(None, &BTreeMap::new()),
+            BTreeMap::from(
+                [
+                    ("GIT_CONFIG_COUNT", "1"),
+                    ("GIT_CONFIG_KEY_0", "credential.helper"),
+                    ("GIT_CONFIG_VALUE_0", ""),
                 ]
                 .map(|(name, value)| (name.to_owned(), value.to_owned()))
             )
