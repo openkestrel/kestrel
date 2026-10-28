@@ -19,6 +19,7 @@ use support::supervisor;
 
 /// Longer than the hub's 250 ms coalescing window, so a quiet gap is really quiet.
 const QUIET: Duration = Duration::from_millis(600);
+const PATIENCE: Duration = Duration::from_secs(30);
 
 struct Stream {
     response: reqwest::Response,
@@ -125,6 +126,19 @@ async fn notices_until_quiet(stream: &mut Stream) -> Vec<Frame> {
     }
 
     frames
+}
+
+/// Collects notices until `expected` holds and the stream goes quiet, or `PATIENCE` runs out.
+async fn notices_until(stream: &mut Stream, expected: impl Fn(&[Frame]) -> bool) -> Vec<Frame> {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let mut frames = Vec::new();
+    loop {
+        match stream.next(QUIET).await {
+            Some(frame) => frames.push(frame),
+            None if expected(&frames) || tokio::time::Instant::now() >= deadline => return frames,
+            None => {}
+        }
+    }
 }
 
 fn names(frames: &[Frame]) -> Vec<String> {
@@ -300,7 +314,15 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
     );
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let opened = notices_until_quiet(&mut changes).await;
+    let opened = notices_until(&mut changes, |opened| {
+        names_workspace(
+            opened,
+            "workspace",
+            &workspace.id.to_string(),
+            &workspace.name,
+        )
+    })
+    .await;
     assert!(
         names_workspace(
             &opened,
@@ -314,7 +336,11 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
 
     let session = post(&kestrel, workspace.id, "begin").await;
     let session_id = session["id"].as_str().expect("the session id").to_owned();
-    let started = notices_until_quiet(&mut changes).await;
+    let started = notices_until(&mut changes, |started| {
+        names_workspace(started, "session", &session_id, &workspace.name)
+            && names_changed(started, "queue", None)
+    })
+    .await;
     assert!(
         names_workspace(&started, "session", &session_id, &workspace.name),
         "starting a session raised no session notice naming its workspace: {started:?}",
@@ -329,7 +355,10 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
     kestrel
         .stop_session(session_id.parse().expect("a session id"))
         .await;
-    let ended = notices_until_quiet(&mut changes).await;
+    let ended = notices_until(&mut changes, |ended| {
+        names_changed(ended, "session", Some(&session_id)) && names_changed(ended, "queue", None)
+    })
+    .await;
     assert!(
         names_changed(&ended, "session", Some(&session_id)),
         "ending the session raised no session notice: {ended:?}",
@@ -365,7 +394,10 @@ async fn a_notice_never_arrives_before_a_get_shows_its_change() {
         .stop_session(session_id.parse().expect("a session id"))
         .await;
 
-    let ended = notices_until_quiet(&mut changes).await;
+    let ended = notices_until(&mut changes, |ended| {
+        names_changed(ended, "session", Some(&session_id))
+    })
+    .await;
     assert!(
         names_changed(&ended, "session", Some(&session_id)),
         "ending the session raised no session notice: {ended:?}",
@@ -443,7 +475,7 @@ async fn other_organizations_receive_only_anonymous_queue_changes() {
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     post(&kestrel, workspace.id, "begin").await;
-    let theirs = notices_until_quiet(&mut other).await;
+    let theirs = notices_until(&mut other, |theirs| names_changed(theirs, "queue", None)).await;
     assert!(
         theirs.len() == 1 && names_changed(&theirs, "queue", None),
         "only a queue invalidation may reach the other Organization: {theirs:?}",
@@ -451,7 +483,10 @@ async fn other_organizations_receive_only_anonymous_queue_changes() {
     );
 
     let ours = kestrel.open_workspace("other", "kestrel", "builder").await;
-    let noticed = notices_until_quiet(&mut other).await;
+    let noticed = notices_until(&mut other, |noticed| {
+        names_changed(noticed, "workspace", Some(&ours.id.to_string()))
+    })
+    .await;
     assert!(
         names_changed(&noticed, "workspace", Some(&ours.id.to_string())),
         "other's own change raised no notice: {noticed:?}",
@@ -478,14 +513,17 @@ async fn held_input_changes_invalidate_foreign_queue_positions() {
     kestrel
         .post_while_busy(workspace.id, "alice", "next Turn")
         .await;
-    let held = notices_until_quiet(&mut other).await;
+    let held = notices_until(&mut other, |held| names_changed(held, "queue", None)).await;
     assert_eq!(names(&held), ["change({\"resource\":\"queue\"})"]);
     let message = kestrel.held_messages(workspace.id).await.remove(0);
     kestrel
         .withdraw_message(workspace.id, message.id, "alice")
         .await
         .unwrap();
-    let withdrawn = notices_until_quiet(&mut other).await;
+    let withdrawn = notices_until(&mut other, |withdrawn| {
+        names_changed(withdrawn, "queue", None)
+    })
+    .await;
     assert_eq!(names(&withdrawn), ["change({\"resource\":\"queue\"})"]);
     kestrel.teardown().await;
 }
@@ -576,7 +614,10 @@ async fn live_usage_raises_no_change_notice() {
     );
 
     let session = kestrel.enqueue_session(workspace.id).await;
-    let started = notices_until_quiet(&mut changes).await;
+    let started = notices_until(&mut changes, |started| {
+        names_changed(started, "session", Some(&session.id.to_string()))
+    })
+    .await;
     assert!(
         names_changed(&started, "session", Some(&session.id.to_string())),
         "the started session raised no session notice: {started:?}",
@@ -625,7 +666,10 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
         a_session_state(vec![a_running_tool("read a")], vec![], false),
     )
     .await;
-    let started = notices_until_quiet(&mut changes).await;
+    let started = notices_until(&mut changes, |started| {
+        names_changed(started, "session", Some(&id))
+    })
+    .await;
     assert!(
         names_changed(&started, "session", Some(&id)),
         "starting a call raised no session notice: {started:?}",
@@ -658,7 +702,10 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
         a_session_state(vec![], vec![], false),
     )
     .await;
-    let settled = notices_until_quiet(&mut changes).await;
+    let settled = notices_until(&mut changes, |settled| {
+        names_changed(settled, "session", Some(&id))
+    })
+    .await;
     assert!(
         names_changed(&settled, "session", Some(&id)),
         "settling a call raised no session notice: {settled:?}",
@@ -697,7 +744,10 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
         a_session_state(vec![], vec![a_running_unit()], false),
     )
     .await;
-    let opened = notices_until_quiet(&mut changes).await;
+    let opened = notices_until(&mut changes, |opened| {
+        names_changed(opened, "session", Some(&id))
+    })
+    .await;
     assert!(
         names_changed(&opened, "session", Some(&id)),
         "opening a unit raised no session notice: {opened:?}",
@@ -731,7 +781,10 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
         a_session_state(vec![], vec![], false),
     )
     .await;
-    let settled = notices_until_quiet(&mut changes).await;
+    let settled = notices_until(&mut changes, |settled| {
+        names_changed(settled, "session", Some(&id))
+    })
+    .await;
     assert!(
         names_changed(&settled, "session", Some(&id)),
         "settling a unit raised no session notice: {settled:?}",
@@ -776,7 +829,10 @@ async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_noti
         },
     )
     .await;
-    let changed = notices_until_quiet(&mut changes).await;
+    let changed = notices_until(&mut changes, |changed| {
+        names_changed(changed, "workspace", Some(&workspace.id.to_string()))
+    })
+    .await;
     assert!(
         names_changed(&changed, "workspace", Some(&workspace.id.to_string())),
         "a changed work summary raised no workspace notice: {changed:?}",
