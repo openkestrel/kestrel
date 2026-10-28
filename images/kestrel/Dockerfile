@@ -1,10 +1,25 @@
 # syntax=docker/dockerfile:1
 
 # rust:1.96.0-slim-trixie
-FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c28 AS build
+FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c28 AS chef
 
+RUN cargo install --locked cargo-chef@0.1.78
 WORKDIR /src
-COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
+COPY rust-toolchain.toml ./
+
+FROM chef AS recipe
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+# The dependencies are their own layer, keyed by the manifests alone, so a change to the workspace's
+# source reuses them from the layer cache rather than compiling them again.
+FROM chef AS build
+
+COPY --from=recipe /src/recipe.json ./
+RUN cargo chef cook --locked --release --package kestrel --package kestrel-client
+COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --locked --release --package kestrel --package kestrel-client
 
