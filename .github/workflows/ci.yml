@@ -334,13 +334,13 @@ jobs:
           size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
           echo "kestrel-client: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
-  image:
-    name: kestrel-env (image)
-    needs: [changes, build-env]
-    if: needs.changes.outputs.images == 'true'
+  # The heavy suites compile once, beside the image builds rather than after them, and every job
+  # that runs one restores them through `.github/actions/suites`.
+  suites:
+    name: kestrel (suites)
+    needs: changes
+    if: needs.changes.outputs.images == 'true' || needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
-    env:
-      KESTREL_ENV_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
 
@@ -354,6 +354,31 @@ jobs:
         with:
           shared-key: rust-dependencies
           save-if: false
+
+      - name: Compile the heavy suites
+        run: .github/scripts/compile-suites.sh suites.tar.zst
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: suites
+          path: suites.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+  image:
+    name: kestrel-env (image)
+    needs: [changes, build-env, suites]
+    if: needs.changes.outputs.images == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/kestrel
+    env:
+      KESTREL_ENV_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/suites
 
       - uses: ./.github/actions/docker-hub-mirror
 
@@ -361,38 +386,36 @@ jobs:
         run: docker pull "${KESTREL_ENV_IMAGE_SOURCE}"
 
       - name: Test the image
-        run: cargo test --locked --package kestrel --test image -- --ignored
+        run: |
+          "${SUITES}/image" --ignored
 
       - name: Test the Docker driver
-        run: cargo test --locked --package kestrel --test docker -- --ignored
+        run: |
+          "${SUITES}/docker" --ignored
 
       - name: Test the image capability checks
-        run: cargo test --locked --package kestrel --test capability -- --ignored
+        run: |
+          "${SUITES}/capability" --ignored
 
       # One harness, one model stub and one host daemon, so a Session at a time.
       - name: Test the harness the image ships
-        run: cargo test --locked --package kestrel --test opencode -- --ignored --test-threads 1
+        run: |
+          "${SUITES}/opencode" --ignored --test-threads 1
 
   development:
     name: kestrel-dev (image)
-    needs: [changes, build-env]
+    needs: [changes, build-env, suites]
     if: needs.changes.outputs.images == 'true'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/kestrel
     env:
       KESTREL_ENV_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
 
-      - uses: jdx/mise-action@v4
-        with:
-          install_args: rust
-
-      - uses: ./.github/actions/pinned-rust
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-dependencies
-          save-if: false
+      - uses: ./.github/actions/suites
 
       - uses: ./.github/actions/docker-hub-mirror
 
@@ -404,32 +427,25 @@ jobs:
       - name: Test the image
         run: |
           started=$(date +%s)
-          cargo test --locked --package kestrel --test development -- --ignored \
-            --skip kestrel_passes_its_own_checks
+          "${SUITES}/development" --ignored --skip kestrel_passes_its_own_checks
           image=$(docker image ls --filter 'reference=kestrel-dev:test-*' --format '{{.Repository}}:{{.Tag}}' | head -n 1)
           size=$(docker image inspect "$image" --format '{{.Size}}')
           echo "kestrel-dev: $((size / 1024 / 1024)) MiB, built and tested in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
   control-plane:
     name: kestrel (image)
-    needs: [changes, build-control-plane]
+    needs: [changes, build-control-plane, suites]
     if: needs.changes.outputs.images == 'true'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/kestrel
     env:
       KESTREL_CONTROL_IMAGE_SOURCE: ghcr.io/${{ github.repository }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
 
-      - uses: jdx/mise-action@v4
-        with:
-          install_args: rust
-
-      - uses: ./.github/actions/pinned-rust
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-dependencies
-          save-if: false
+      - uses: ./.github/actions/suites
 
       - uses: ./.github/actions/docker-hub-mirror
 
@@ -437,13 +453,17 @@ jobs:
         run: docker pull "${KESTREL_CONTROL_IMAGE_SOURCE}"
 
       - name: Test the image
-        run: cargo test --locked --package kestrel --test control_plane -- --ignored
+        run: |
+          "${SUITES}/control_plane" --ignored
 
   compose:
     name: kestrel (compose)
-    needs: [changes, build-env, build-control-plane, build-client]
+    needs: [changes, build-env, build-control-plane, build-client, suites]
     if: needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/kestrel
     env:
       KESTREL_ENV_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
       KESTREL_CONTROL_IMAGE_SOURCE: ghcr.io/${{ github.repository }}:${{ github.sha }}
@@ -451,16 +471,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: jdx/mise-action@v4
-        with:
-          install_args: rust
-
-      - uses: ./.github/actions/pinned-rust
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-dependencies
-          save-if: false
+      - uses: ./.github/actions/suites
 
       - uses: ./.github/actions/docker-hub-mirror
 
@@ -473,12 +484,14 @@ jobs:
       # A checkout's compose suite is scoped to a namespace derived from its path, so the
       # stack comes up once at a time per checkout rather than once per machine.
       - name: Test the compose path
-        run: cargo test --locked --package kestrel --test compose -- --ignored --test-threads 1
+        run: |
+          "${SUITES}/compose" --ignored --test-threads 1
 
       # The sweep every suite runs first, exercised against the resources a deleted checkout
       # leaves behind.
       - name: Test the sweep
-        run: cargo test --locked --package kestrel --test cleanup -- --ignored
+        run: |
+          "${SUITES}/cleanup" --ignored
 
   # The only job that builds the arm64 half of the image: the release it pins, the checksum it
   # verifies, and the architecture it selects on.
@@ -527,6 +540,7 @@ jobs:
       - development
       - control-plane
       - compose
+      - suites
       - client
       - architectures
     if: always()

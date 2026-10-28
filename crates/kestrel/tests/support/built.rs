@@ -63,6 +63,11 @@ pub fn named(package: &str, binary: &str) -> PathBuf {
         HELPERS.contains(&(package, binary)),
         "unknown helper {package}/{binary}"
     );
+    if let Some(helpers) = std::env::var_os("KESTREL_TEST_HELPERS") {
+        let artifact = PathBuf::from(helpers).join(binary);
+        Artifact::at(&artifact);
+        return artifact;
+    }
     let prepared = PREPARED.get_or_init(|| {
         let directory = alongside_this_test();
         let artifacts = prepare(&directory);
