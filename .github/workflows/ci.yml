@@ -110,6 +110,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       # One cache shared by every job that compiles Rust; only Main's push to main writes it (ADR-0027).
       - uses: Swatinem/rust-cache@v2
         with:
@@ -144,6 +146,8 @@ jobs:
         with:
           install_args: rust github:nextest-rs/nextest
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
@@ -166,6 +170,8 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust github:nextest-rs/nextest
+
+      - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -191,6 +197,8 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust bun caddy
+
+      - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -352,6 +360,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
@@ -389,6 +399,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
@@ -424,6 +436,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
@@ -452,6 +466,8 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust
+
+      - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
         with:

@@ -57,6 +57,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
@@ -99,6 +101,8 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust
+
+      - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
 

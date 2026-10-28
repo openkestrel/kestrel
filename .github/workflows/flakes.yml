@@ -27,6 +27,8 @@ jobs:
         with:
           install_args: rust github:nextest-rs/nextest
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
