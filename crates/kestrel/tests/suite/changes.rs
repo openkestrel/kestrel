@@ -20,6 +20,7 @@ use support::supervisor;
 /// Longer than the hub's 250 ms coalescing window, so a quiet gap is really quiet.
 const QUIET: Duration = Duration::from_millis(600);
 const PATIENCE: Duration = Duration::from_secs(30);
+const SETTLE: Duration = Duration::from_secs(2);
 
 struct Stream {
     response: reqwest::Response,
@@ -126,6 +127,12 @@ async fn notices_until_quiet(stream: &mut Stream) -> Vec<Frame> {
     }
 
     frames
+}
+
+/// Discards what setup raised; on a loaded runner a setup notice can trail its write by more than `QUIET`.
+async fn drain(stream: &mut Stream) {
+    let deadline = tokio::time::Instant::now() + SETTLE;
+    while stream.next(QUIET).await.is_some() || tokio::time::Instant::now() < deadline {}
 }
 
 /// Collects notices until `expected` holds and the stream goes quiet, or `PATIENCE` runs out.
@@ -656,7 +663,7 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
         changes.next(QUIET).await.expect("an open event").name,
         "open"
     );
-    notices_until_quiet(&mut changes).await;
+    drain(&mut changes).await;
 
     let id = session.id.to_string();
     reported(
@@ -734,7 +741,7 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
         changes.next(QUIET).await.expect("an open event").name,
         "open"
     );
-    notices_until_quiet(&mut changes).await;
+    drain(&mut changes).await;
 
     let id = session.id.to_string();
     reported(
@@ -818,7 +825,7 @@ async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_noti
         changes.next(QUIET).await.expect("an open event").name,
         "open"
     );
-    notices_until_quiet(&mut changes).await;
+    drain(&mut changes).await;
 
     reported(
         &link,
