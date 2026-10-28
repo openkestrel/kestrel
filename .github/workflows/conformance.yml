@@ -25,6 +25,8 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
 
       - uses: ./.github/actions/docker-hub-mirror

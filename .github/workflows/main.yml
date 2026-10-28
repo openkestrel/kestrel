@@ -57,15 +57,59 @@ jobs:
         with:
           install_args: rust
 
+      - uses: ./.github/actions/pinned-rust
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-dependencies
 
+      # Each command matches the gate's, features included: one the gate runs differently here
+      # leaves its dependencies uncached, and the gate compiles them on every run.
       - name: Build what the gate builds
         run: |
-          cargo clippy --locked --workspace --all-targets
+          cargo build --locked --package kestrel-operator-types --bin generate --features generate
+          cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate
           cargo build --locked --workspace
           cargo test --locked --workspace --no-run
+
+  # The registry, not the Actions cache, holds image layers: every layer of three images would crowd
+  # the Rust dependency cache out of the repository's Actions cache budget.
+  image-cache:
+    name: ${{ matrix.image }} (image cache)
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: kestrel
+            package: ${{ github.repository }}
+          - image: kestrel-env
+            package: ${{ github.repository }}-env
+          - image: kestrel-client
+            package: ${{ github.repository }}-client
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/docker-hub-mirror
+        with:
+          buildx: true
+
+      - uses: ./.github/actions/registry-login
+
+      - name: Write the layers the gate's image build restores
+        env:
+          CACHE: ghcr.io/${{ matrix.package }}:buildcache
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker buildx build \
+            --file "images/${IMAGE}/Dockerfile" \
+            --cache-from "type=registry,ref=${CACHE}" \
+            --cache-to "type=registry,ref=${CACHE},mode=max" \
+            --output type=cacheonly .
 
   bun-cache:
     name: bun (cache)
@@ -96,6 +140,8 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust
+
+      - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
 

@@ -1,0 +1,16 @@
+name: Pinned Rust only
+description: >-
+  Removes every Rust toolchain but the one rust-toolchain.toml pins. The dependency cache key hashes
+  each installed toolchain, so the runner image's own `stable`, which moves with the image, would
+  otherwise split one cache into one per image version and send a job on a newer image in cold.
+runs:
+  using: composite
+  steps:
+    - name: Remove the toolchains rust-toolchain.toml does not pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        pinned=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "${GITHUB_WORKSPACE}/rust-toolchain.toml")
+        rustup toolchain list | awk '{ print $1 }' | { grep -v "^${pinned}-" || true; } \
+          | xargs --no-run-if-empty --max-args 1 rustup toolchain uninstall
+        rustup toolchain list
