@@ -79,7 +79,7 @@ identity other than the App's.
 `crates/kestrel/tests/development.rs` holds ignored tests. CI runs them on every change: the
 toolchain, `git`, and `gh` each run; each of the three harnesses answers an ACP `initialize`; and no
 credentials are present. `kestrel_passes_its_own_checks_in_the_image` mounts the checkout read-only
-and runs the same `fmt`, `clippy`, `build`, and `test` commands as CI's workspace job. Because it
+and runs the same `fmt`, `clippy`, `build`, and `test` commands as CI's Rust jobs. Because it
 compiles the workspace three times, it runs in the scheduled `Development image` workflow:
 
 ```sh

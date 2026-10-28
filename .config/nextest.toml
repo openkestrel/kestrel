@@ -1,8 +1,12 @@
 # A test that passes on a retry still fails the gate (ADR-0042): the retry only labels it FLAKY.
+# Most tests wait on a process or a deadline rather than a core, so the gate runs twice as many as
+# its runner has cores, and the stress run matches it so a flake it finds is one the gate would see.
 [profile.ci]
 fail-fast = false
 retries = 2
 flaky-result = "fail"
+test-threads = 8
 
 [profile.stress]
 fail-fast = false
+test-threads = 8
