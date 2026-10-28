@@ -97,8 +97,8 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
         run: mise exec -- python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
-  workspace:
-    name: workspace (rust)
+  lint:
+    name: lint (rust)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -108,7 +108,7 @@ jobs:
       # The rust version comes from rust-toolchain.toml.
       - uses: jdx/mise-action@v4
         with:
-          install_args: rust github:nextest-rs/nextest
+          install_args: rust
 
       # One cache shared by every job that compiles Rust; only Main's push to main writes it (ADR-0027).
       - uses: Swatinem/rust-cache@v2
@@ -121,13 +121,33 @@ jobs:
 
       - name: Check generated operator types
         env:
-          # This job installs only rust and nextest; without this, `mise run` would install every
-          # other tool in mise.toml.
+          # This job installs only rust; without this, `mise run` would install every other tool in
+          # mise.toml.
           MISE_AUTO_INSTALL: "false"
         run: mise run generate-check
 
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate -- -D warnings
+
+      - name: Check the registry retry helper
+        run: bash .github/scripts/test-retry.sh
+
+  workspace:
+    name: workspace (rust)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust github:nextest-rs/nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-dependencies
+          save-if: false
 
       - name: Build the binaries
         run: cargo build --locked --workspace
@@ -135,11 +155,25 @@ jobs:
       - name: Test
         run: cargo nextest run --locked --workspace --profile ci
 
+  helpers:
+    name: helpers (rust)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust github:nextest-rs/nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-dependencies
+          save-if: false
+
       - name: Check executable helper preparation
         run: bash .github/scripts/test-helper-preparation.sh
-
-      - name: Check the registry retry helper
-        run: bash .github/scripts/test-retry.sh
 
   # The e2e suite drives the built Client through the Client image's Caddyfile and a control plane
   # it compiles, so it needs Caddy and Rust too.
@@ -479,7 +513,9 @@ jobs:
     needs:
       - changes
       - release-version
+      - lint
       - workspace
+      - helpers
       - build-env
       - build-control-plane
       - build-client

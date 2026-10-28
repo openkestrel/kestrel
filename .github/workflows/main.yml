@@ -61,9 +61,12 @@ jobs:
         with:
           shared-key: rust-dependencies
 
+      # Each command matches the gate's, features included: one the gate runs differently here
+      # leaves its dependencies uncached, and the gate compiles them on every run.
       - name: Build what the gate builds
         run: |
-          cargo clippy --locked --workspace --all-targets
+          cargo build --locked --package kestrel-operator-types --bin generate --features generate
+          cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate
           cargo build --locked --workspace
           cargo test --locked --workspace --no-run
 
