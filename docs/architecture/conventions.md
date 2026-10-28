@@ -87,9 +87,12 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   agent and Client, in the test executable's absolute target directory and selected profile.
   Direct `cargo test` needs no prebuild; nextest processes share preparation by `NEXTEST_RUN_ID`.
   Replaced or missing artifacts within that invocation fail with the helper's path.
+  `KESTREL_TEST_HELPERS` names a directory of helpers built elsewhere instead, and Cargo is not run.
 - **Heavier tests are `#[ignore]`d and CI runs them**, each suite its own file and binary beside
-  `suite/`: `docker`, `image`, `opencode`, `development`, `control_plane`, `compose` and `cleanup`,
-  each named in `.github/workflows/ci.yml`. `conformance.yml` drives a second ACP agent to prove
+  `suite/`: `docker`, `image`, `capability`, `opencode`, `development`, `control_plane`, `compose`
+  and `cleanup`, each named in `.github/workflows/ci.yml`. CI compiles them once, beside the image
+  builds, and runs each binary directly rather than under nextest, because their fixtures are
+  shared within the process. `conformance.yml` drives a second ACP agent to prove
   nothing branches on the harness; `contention` measures load and `subscription` spends a
   person's model plan, so only a person runs them.
 - **The supervisor has its own suite** in `crates/kestrel-supervisor/tests/` against a stub link.

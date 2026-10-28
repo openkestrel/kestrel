@@ -1,0 +1,23 @@
+name: Heavy suites
+description: >-
+  Restores the heavy suites the `suites` job compiled, with the helpers they spawn, and points
+  `SUITES` and `KESTREL_TEST_HELPERS` at them. Run a suite from `crates/kestrel`, as Cargo would.
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: suites
+        path: ${{ runner.temp }}
+
+    - name: Unpack the suites
+      shell: bash
+      run: |
+        suites="${RUNNER_TEMP}/suites"
+        mkdir "$suites"
+        tar --zstd --extract --file "${RUNNER_TEMP}/suites.tar.zst" --directory "$suites"
+        {
+          echo "SUITES=$suites"
+          echo "KESTREL_TEST_HELPERS=$suites"
+          echo "CARGO_MANIFEST_DIR=${GITHUB_WORKSPACE}/crates/kestrel"
+        } >> "$GITHUB_ENV"
