@@ -134,8 +134,8 @@ jobs:
       - name: Check the registry retry helper
         run: bash .github/scripts/test-retry.sh
 
-  workspace:
-    name: workspace (rust)
+  workspace-archive:
+    name: workspace (archive)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
@@ -156,8 +156,47 @@ jobs:
       - name: Build the binaries
         run: cargo build --locked --workspace
 
-      - name: Test
-        run: cargo nextest run --locked --workspace --profile ci
+      - name: Archive the tests and executable helpers
+        run: cargo nextest archive --locked --workspace --profile ci --archive-file workspace.tar.zst
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: workspace
+          path: workspace.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  workspace:
+    name: workspace (rust, ${{ matrix.shard }}/3)
+    needs: [changes, workspace-archive]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      KESTREL_TEST_HELPERS: ${{ github.workspace }}/target/debug
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: github:nextest-rs/nextest
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: workspace
+          path: ${{ runner.temp }}
+
+      - name: Test the shard from the archive
+        run: >-
+          cargo-nextest nextest run --profile ci
+          --archive-file "${RUNNER_TEMP}/workspace.tar.zst"
+          --workspace-remap "${GITHUB_WORKSPACE}"
+          --extract-to "${GITHUB_WORKSPACE}"
+          --partition hash:${{ matrix.shard }}/3
 
   helpers:
     name: helpers (rust)
@@ -531,6 +570,7 @@ jobs:
       - changes
       - release-version
       - lint
+      - workspace-archive
       - workspace
       - helpers
       - build-env

@@ -6,6 +6,11 @@ fail-fast = false
 retries = 2
 flaky-result = "fail"
 test-threads = 8
+archive.include = [
+    { path = "debug/kestrel-supervisor", relative-to = "target", on-missing = "error" },
+    { path = "debug/kestrel-scripted-agent", relative-to = "target", on-missing = "error" },
+    { path = "debug/kestrel", relative-to = "target", on-missing = "error" },
+]
 
 [profile.stress]
 fail-fast = false
