@@ -2,7 +2,6 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{
     Exit, Preparing, Session, SessionId, SessionState, Workspace, WorkspaceState,
 };
@@ -573,7 +572,12 @@ async fn posts_after_the_brief_are_held_and_drain_into_the_next_turn() {
 
 #[tokio::test]
 async fn an_idle_unbriefed_workspace_seals_after_the_window() {
-    let kestrel = Kestrel::dispatching(supervisor::binary()).await;
+    let kestrel = Kestrel::stepped_dispatching_to(
+        supervisor::binary(),
+        &support::scripted_agent::playing(support::scripted_agent::Script::Speaks),
+    )
+    .await;
+    kestrel.go_live().await;
     let workspace = a_workspace(&kestrel).await;
 
     let queued = kestrel
@@ -585,12 +589,7 @@ async fn an_idle_unbriefed_workspace_seals_after_the_window() {
     .await;
     assert!(ready.instance.is_some());
 
-    kestrel
-        .last_active(
-            &workspace,
-            Timestamp::now() - SignedDuration::from_hours(25),
-        )
-        .await;
+    kestrel.away_for(std::time::Duration::from_secs(25 * 60 * 60));
     let sealed = sealed_by_the_sweep(&kestrel, workspace).await;
 
     assert_eq!(sealed.state, WorkspaceState::Sealed);

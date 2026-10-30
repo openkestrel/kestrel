@@ -2632,17 +2632,6 @@ impl Kestrel {
         link::start(&self.store, session, harness).await
     }
 
-    /// Backdates when a Workspace was last active, the way `lease_until` backdates a lease: the
-    /// only way to watch the idle sweep without waiting the window out.
-    pub async fn last_active(&self, workspace: &Workspace, at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .record_active(workspace.organization.id, workspace.id, at)
-            .await
-            .expect("the workspace should record when it was last active");
-        tx.commit().await.expect("the record should commit");
-    }
-
     /// The only way to watch the periodic sweep find what a missed event would have.
     pub async fn last_considered(&self, event: EventRecordId, at: Timestamp) {
         let mut tx = self.store.begin().await.expect("a transaction");

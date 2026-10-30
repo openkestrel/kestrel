@@ -5,7 +5,6 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceState};
 use support::Kestrel;
 use support::fixture::Fixture;
@@ -42,9 +41,8 @@ async fn a_session_blocked_on_an_active_one(kestrel: &Kestrel) -> Blocked {
     }
 }
 
-/// Long enough that a sweep that was going to seal this Workspace has run several times over.
 async fn stays_open(kestrel: &Kestrel, workspace: &Workspace) {
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    kestrel.work_pass().await;
 
     assert_eq!(
         kestrel.show_workspace(workspace.id).await.state,
@@ -262,16 +260,15 @@ async fn a_session_blocked_on_a_blocker_that_ended_without_an_exit_is_never_clai
 
 #[tokio::test]
 async fn a_blocked_session_keeps_its_turn_however_long_it_waits() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let Blocked {
         blocker,
         dependent,
         waiting,
     } = a_session_blocked_on_an_active_one(&kestrel).await;
 
-    kestrel
-        .last_active(&waiting, Timestamp::now() - SignedDuration::from_hours(25))
-        .await;
+    kestrel.work_pass().await;
+    kestrel.away_for(Duration::from_secs(25 * 60 * 60));
     stays_open(&kestrel, &waiting).await;
 
     assert!(

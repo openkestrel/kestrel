@@ -241,9 +241,7 @@ async fn a_session_enqueued_before_the_idle_sweep_keeps_its_workspace_open() {
     let kestrel = Kestrel::stepped().await;
     let held = a_workspace(&kestrel).await;
     let idle = another_workspace(&kestrel).await;
-    let a_day_ago = Timestamp::now() - SignedDuration::from_hours(25);
-    kestrel.last_active(&held, a_day_ago).await;
-    kestrel.last_active(&idle, a_day_ago).await;
+    kestrel.away_for(Duration::from_secs(25 * 60 * 60));
 
     kestrel.enqueue_session(held.id).await;
     kestrel.work_pass().await;

@@ -833,7 +833,7 @@ async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
 
 #[tokio::test]
 async fn a_trailing_session_refuses_seal_and_the_idle_sweep() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let session = trailing(&kestrel, &workspace, "trailing").await;
 
@@ -846,13 +846,9 @@ async fn a_trailing_session_refuses_seal_and_the_idle_sweep() {
         "{refusal}"
     );
 
-    kestrel
-        .last_active(
-            &workspace,
-            Timestamp::now() - SignedDuration::from_hours(25),
-        )
-        .await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    kestrel.work_pass().await;
+    kestrel.away_for(Duration::from_secs(25 * 60 * 60));
+    kestrel.work_pass().await;
     assert_eq!(
         kestrel.show_workspace(workspace.id).await.state,
         WorkspaceState::Open,
@@ -864,13 +860,11 @@ async fn a_trailing_session_refuses_seal_and_the_idle_sweep() {
 
 #[tokio::test]
 async fn cap_reclamation_never_archives_a_trailing_sessions_instance() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let first = a_workspace_in(&kestrel, Some(1)).await;
     let arriving = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let session = trailing(&kestrel, &first, "trailing").await;
-    kestrel
-        .last_active(&first, Timestamp::now() - SignedDuration::from_hours(2))
-        .await;
+    kestrel.away_for(Duration::from_secs(2 * 60 * 60));
 
     kestrel.enqueue_session(arriving.id).await;
     assert!(kestrel.occupy_session().await.is_none());

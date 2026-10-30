@@ -2,7 +2,6 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
 use kestrel::scheduling::Reason;
@@ -63,6 +62,8 @@ async fn reasons(kestrel: &Kestrel, session: &Session) -> Vec<Reason> {
         .reasons
 }
 
+const AN_HOUR: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 async fn complete_clean_sessions(kestrel: &Kestrel, workspaces: &[(&Workspace, &str)]) {
     for (workspace, instance) in workspaces {
         let queued = kestrel.enqueue_session(workspace.id).await;
@@ -104,13 +105,12 @@ async fn an_active_instance_counts_toward_the_organization_limit() {
 
 #[tokio::test]
 async fn reclaiming_for_new_work_does_not_delay_a_follow_up_that_already_has_an_instance() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (oldest, existing, arriving) = workspaces(&kestrel, 2).await;
 
-    complete_clean_sessions(&kestrel, &[(&oldest, "oldest"), (&existing, "existing")]).await;
-    kestrel
-        .last_active(&oldest, Timestamp::now() - SignedDuration::from_hours(1))
-        .await;
+    complete_clean_sessions(&kestrel, &[(&oldest, "oldest")]).await;
+    kestrel.away_for(AN_HOUR);
+    complete_clean_sessions(&kestrel, &[(&existing, "existing")]).await;
 
     let new_session = kestrel.enqueue_session(arriving.id).await;
     let follow_up = kestrel.enqueue_session(existing.id).await;
@@ -180,16 +180,13 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
 
 #[tokio::test]
 async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (oldest, newer, arriving) = workspaces(&kestrel, 2).await;
 
-    complete_clean_sessions(&kestrel, &[(&oldest, "oldest"), (&newer, "newer")]).await;
-    kestrel
-        .last_active(&oldest, Timestamp::now() - SignedDuration::from_hours(2))
-        .await;
-    kestrel
-        .last_active(&newer, Timestamp::now() - SignedDuration::from_hours(1))
-        .await;
+    complete_clean_sessions(&kestrel, &[(&oldest, "oldest")]).await;
+    kestrel.away_for(AN_HOUR);
+    complete_clean_sessions(&kestrel, &[(&newer, "newer")]).await;
+    kestrel.away_for(AN_HOUR);
 
     let third = kestrel.enqueue_session(arriving.id).await;
     assert!(kestrel.occupy_session().await.is_none());
