@@ -562,7 +562,7 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
         rotation: None,
     };
 
-    let listing = Github::unfenced()
+    let listing = Github::unfenced(&kestrel::timer::Clock::System)
         .expect("the GitHub client")
         .deliveries(&integration, from)
         .await

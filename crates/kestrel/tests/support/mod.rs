@@ -228,7 +228,6 @@ pub enum Pace {
 }
 
 impl Pace {
-    /// A stepped control plane keeps time only as a test advances it (ADR-0059).
     fn clock(self) -> Clock {
         match self {
             Self::Live => Clock::System,
@@ -1155,7 +1154,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::replace_private_key(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
             private_key,
@@ -1172,7 +1171,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::rotate_webhook_secret(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
             revision,
@@ -1191,7 +1190,7 @@ impl Kestrel {
         tokio::spawn(async move {
             integration::rotate_webhook_secret(
                 &store,
-                &Github::unfenced()?,
+                &Github::unfenced(store.clock())?,
                 &organization,
                 &name,
                 None,
@@ -1207,7 +1206,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::resume_webhook_secret_rotation(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
         )

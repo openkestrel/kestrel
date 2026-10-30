@@ -21,6 +21,14 @@ const READINGS: [&str; 5] = [
     ".elapsed()",
 ];
 
+/// Each keeps real time on purpose: what it times is a process or the default for production.
+const SYSTEM_CLOCK_READERS: [&str; 4] = [
+    "compute/docker.rs",
+    "compute/local_exec.rs",
+    "sign_in/relay.rs",
+    "store/mod.rs",
+];
+
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     Fixture::acme().model("claude-opus-5").open(kestrel).await
 }
@@ -41,6 +49,22 @@ fn nothing_in_the_control_plane_reads_the_time_but_its_clock() {
                 path.display()
             );
         }
+        let relative = path.strip_prefix(&source).expect("a path under src");
+        let unit_tests = relative.ends_with("tests.rs");
+        let production = ["#[cfg(test)]", "#[cfg(all(test"]
+            .iter()
+            .filter_map(|tests| text.find(tests))
+            .min()
+            .map_or(text.as_str(), |tests| &text[..tests]);
+        assert!(
+            unit_tests
+                || SYSTEM_CLOCK_READERS
+                    .iter()
+                    .any(|reader| relative.ends_with(reader))
+                || !production.contains("Clock::System"),
+            "{} reads the system clock past the clock it was given",
+            path.display()
+        );
     }
 }
 

@@ -307,7 +307,7 @@ impl Github {
         Ok(Self {
             fence: Some(store.clone()),
             clock: store.clock().clone(),
-            ..Self::unfenced()?
+            ..Self::unfenced(store.clock())?
         })
     }
 
@@ -316,7 +316,7 @@ impl Github {
     }
 
     /// For calls made with a credential rather than a saved Integration, such as registration.
-    pub fn unfenced() -> Result<Self> {
+    pub fn unfenced(clock: &Clock) -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(REQUEST)
@@ -325,7 +325,7 @@ impl Github {
                 .context("building the client kestrel polls github with")?,
             tokens: Mutex::new(HashMap::new()),
             fence: None,
-            clock: Clock::System,
+            clock: clock.clone(),
         })
     }
 

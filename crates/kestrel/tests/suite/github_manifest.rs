@@ -69,7 +69,6 @@ async fn select(kestrel: &Kestrel, stub: &GithubStub, client: &Client, state: &s
     repository(stub);
 }
 
-/// How long a GitHub App setup flow stays open.
 const FLOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 #[tokio::test]
@@ -204,7 +203,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
         assert!(!records.to_string().contains("manifest-webhook-secret"));
         assert!(!records.to_string().contains("PRIVATE KEY"));
         let integrations = kestrel.integrations("acme").await;
-        kestrel::integration::github::Github::unfenced()
+        kestrel::integration::github::Github::unfenced(&kestrel::timer::Clock::System)
             .unwrap()
             .issue(&integrations[0], 1)
             .await
