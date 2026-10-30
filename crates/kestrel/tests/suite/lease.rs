@@ -6,8 +6,9 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
+use kestrel::work::{GAP, LEASE};
 use support::environment::Environment;
 use support::fixture::Fixture;
 use support::scripted_agent::Script;
@@ -72,14 +73,9 @@ async fn swept(kestrel: &Kestrel, session: SessionId) -> String {
     because
 }
 
-fn a_moment_ago() -> Timestamp {
-    Timestamp::now() - SignedDuration::from_secs(1)
-}
-
-/// A lease due sooner than a real one, and further off than an Environment that is alive lets
-/// one get.
-fn shortened() -> Timestamp {
-    Timestamp::now() + SignedDuration::from_secs(4)
+/// Past a lease taken now, with the control plane there throughout.
+async fn outlast_a_lease(kestrel: &Kestrel) {
+    kestrel.advance((LEASE + GAP).unsigned_abs()).await;
 }
 
 #[tokio::test]
@@ -102,11 +98,11 @@ async fn a_session_holds_a_lease_from_the_moment_it_is_claimed() {
 
 #[tokio::test]
 async fn a_lease_nothing_holds_out_ends_its_session_failed() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.dispatch_session(workspace.id).await;
 
-    kestrel.lease_until(&session, a_moment_ago()).await;
+    outlast_a_lease(&kestrel).await;
 
     let because = swept(&kestrel, session.id).await;
     assert_eq!(
@@ -125,11 +121,11 @@ async fn a_lease_nothing_holds_out_ends_its_session_failed() {
 
 #[tokio::test]
 async fn a_lease_that_expires_leaves_its_workspace_no_active_session() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.dispatch_session(workspace.id).await;
 
-    kestrel.lease_until(&session, a_moment_ago()).await;
+    outlast_a_lease(&kestrel).await;
     swept(&kestrel, session.id).await;
 
     assert!(
@@ -152,31 +148,22 @@ async fn a_lease_that_expires_leaves_its_workspace_no_active_session() {
 
 #[tokio::test]
 async fn one_parallel_sessions_expired_lease_leaves_the_other_session_active() {
-    let kestrel = Kestrel::dispatching_up_to(
-        supervisor::binary(),
-        &scripted_agent::playing(Script::Dawdles),
-        2,
-    )
-    .await;
+    let kestrel = Kestrel::stepped().await;
     let first_workspace = a_workspace(&kestrel).await;
     let second_workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let first = kestrel.enqueue_session(first_workspace.id).await;
-    let second = kestrel.enqueue_session(second_workspace.id).await;
-    let first = until(&kestrel, first.id, "started", |session| {
-        session.started_at.is_some()
-    })
-    .await;
-    until(&kestrel, second.id, "started", |session| {
-        session.started_at.is_some()
-    })
-    .await;
+    let first = kestrel.dispatch_session(first_workspace.id).await;
+    kestrel.advance(Duration::from_secs(60)).await;
+    let second = kestrel.dispatch_session(second_workspace.id).await;
 
-    kestrel.lease_until(&first, a_moment_ago()).await;
+    kestrel
+        .advance((LEASE + GAP).unsigned_abs() - Duration::from_secs(60))
+        .await;
     swept(&kestrel, first.id).await;
 
     assert_eq!(
         kestrel.session(second.id).await.state,
-        SessionState::Working
+        second.state,
+        "the sweep that ended one session's lease ended the other's too"
     );
 
     kestrel.teardown().await;
@@ -184,11 +171,11 @@ async fn one_parallel_sessions_expired_lease_leaves_the_other_session_active() {
 
 #[tokio::test]
 async fn a_session_failed_by_lease_expiry_is_never_dispatched_again() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.dispatch_session(workspace.id).await;
 
-    kestrel.lease_until(&session, a_moment_ago()).await;
+    outlast_a_lease(&kestrel).await;
     swept(&kestrel, session.id).await;
 
     assert!(
@@ -202,13 +189,12 @@ async fn a_session_failed_by_lease_expiry_is_never_dispatched_again() {
 
 #[tokio::test]
 async fn a_due_time_survives_a_control_plane_restart_and_fires_after_it() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.dispatch_session(workspace.id).await;
 
-    let stopped = kestrel.kill().await;
-    stopped.lease_until(&session, a_moment_ago()).await;
-    let kestrel = stopped.restart().await;
+    let kestrel = kestrel.kill_and_restart().await;
+    outlast_a_lease(&kestrel).await;
 
     swept(&kestrel, session.id).await;
 
@@ -217,28 +203,30 @@ async fn a_due_time_survives_a_control_plane_restart_and_fires_after_it() {
 
 #[tokio::test]
 async fn a_supervisor_holds_its_sessions_lease_out_for_the_life_of_the_session() {
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Dawdles),
     )
     .await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.enqueue_session(workspace.id).await;
-
-    let working = until(&kestrel, session.id, "started", |session| {
+    kestrel.work_pass().await;
+    until(&kestrel, session.id, "started", |session| {
         session.started_at.is_some()
     })
     .await;
-    let shortened = shortened();
-    kestrel.lease_until(&working, shortened).await;
 
-    let held = until(&kestrel, session.id, "had its lease held out", |session| {
-        session.lease_expires_at > Some(shortened)
-    })
-    .await;
-    assert_eq!(held.state, SessionState::Working);
+    // Each step is half a lease, and a heartbeat lands between them, so three outlast the lease
+    // the session was claimed with only if the supervisor holds it out.
+    for _ in 0..3 {
+        kestrel.advance((LEASE / 2).unsigned_abs()).await;
+        let now = kestrel.now();
+        until(&kestrel, session.id, "had its lease held out", |session| {
+            session.lease_expires_at > Some(now + LEASE / 2)
+        })
+        .await;
+    }
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
     assert_eq!(
         kestrel.session(session.id).await.state,
         SessionState::Working,
@@ -258,22 +246,21 @@ async fn a_supervisor_that_dies_mid_session_stops_holding_the_lease_out_and_the_
         "\"{}\" &\nsupervisor=$!\nsleep 3\nkill -9 $supervisor\nsleep 60",
         supervisor::binary().display()
     ));
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         environment.path(),
         &scripted_agent::playing(Script::Dawdles),
     )
     .await;
     let workspace = a_workspace(&kestrel).await;
     let session = kestrel.enqueue_session(workspace.id).await;
-
-    let working = until(&kestrel, session.id, "started", |session| {
+    kestrel.work_pass().await;
+    until(&kestrel, session.id, "started", |session| {
         session.started_at.is_some()
     })
     .await;
     tokio::time::sleep(Duration::from_secs(4)).await;
-    // The same lease the script above outlives: a supervisor still alive holds one out well
-    // inside this, so what ends this Session is the supervisor being gone.
-    kestrel.lease_until(&working, shortened()).await;
+
+    outlast_a_lease(&kestrel).await;
 
     swept(&kestrel, session.id).await;
 

@@ -210,9 +210,7 @@ async fn a_report_on_a_lapsed_lease_is_taken_before_the_sweep_and_refused_after_
     let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
-    kestrel
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    kestrel.lapse_unswept().await;
     let link = Link::to(&kestrel.link());
     let started = |seq| Reported {
         session: Some(session.id),
@@ -324,6 +322,7 @@ async fn a_comment_feeds_its_workspace_unless_the_workspace_seals_before_the_pas
         "jack",
         "please add the missing test",
     ));
+    polled(&kestrel).await;
     kestrel.work_pass().await;
     let fed = kestrel.sessions(workspace.id).await;
     assert_eq!(

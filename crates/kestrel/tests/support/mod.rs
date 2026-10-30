@@ -389,6 +389,21 @@ impl Kestrel {
         .await
     }
 
+    pub async fn stepped_reachable_from_an_environment() -> Self {
+        Self::boot_paced(
+            TempDir::new().expect("a temporary data directory"),
+            Listen {
+                link: "0.0.0.0:0".parse().expect("every interface"),
+                operator: LOOPBACK,
+            },
+            None,
+            kestrel::presence::LEASE,
+            Pace::Stepped,
+            Pace::Stepped.clock(),
+        )
+        .await
+    }
+
     pub async fn boot_with_the_operator_beyond_loopback() -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         Self::boot_against(
@@ -805,6 +820,14 @@ impl Kestrel {
             self.work_pass().await;
             left -= step;
         }
+    }
+
+    /// To the moment a lease taken now lapses, with no pass at that moment, so the lapse is there
+    /// and not yet swept.
+    pub async fn lapse_unswept(&self) {
+        self.advance((kestrel::work::LEASE - kestrel::work::GAP).unsigned_abs())
+            .await;
+        self.away_for(kestrel::work::GAP.unsigned_abs());
     }
 
     /// Time the control plane was away for, which its next lease sweep reads as a gap
@@ -2549,6 +2572,19 @@ impl Kestrel {
             .expect("the workspace's instance should read")
     }
 
+    /// When the supervisor of `instance` last reached the link, by the control plane's clock.
+    pub async fn reached_at(&self, instance: &str) -> Option<Timestamp> {
+        self.store
+            .read()
+            .await
+            .expect("a read")
+            .workspaces()
+            .supervisor(instance)
+            .await
+            .expect("the supervisor should read")
+            .and_then(|supervisor| supervisor.reached_at)
+    }
+
     pub async fn interrupt(
         &self,
         session: SessionId,
@@ -2594,17 +2630,6 @@ impl Kestrel {
         harness: link::Harness,
     ) -> anyhow::Result<link::SentInstruction> {
         link::start(&self.store, session, harness).await
-    }
-
-    /// A lease that is up when the caller says rather than when a real one would be. The only
-    /// way to watch a sweep without waiting a whole lease out.
-    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .hold_lease(session, expires_at)
-            .await
-            .expect("the lease should hold");
-        tx.commit().await.expect("the lease should commit");
     }
 
     /// Backdates when a Workspace was last active, the way `lease_until` backdates a lease: the
@@ -2791,20 +2816,6 @@ impl Stopped {
         work::session(&store, id)
             .await
             .expect("the session should show")
-    }
-
-    /// A due time set while nothing is keeping time, so what fires it afterwards is a control
-    /// plane that could only have read it back.
-    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
-        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
-            .await
-            .expect("the database should still be there");
-        let mut tx = store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .hold_lease(session, expires_at)
-            .await
-            .expect("the lease should hold");
-        tx.commit().await.expect("the lease should commit");
     }
 
     /// Reaches the durable record while nothing is serving it, which is the only way to make

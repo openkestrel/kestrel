@@ -42,6 +42,8 @@ async fn dogfood_declarations(kestrel: &Kestrel) {
     );
 }
 
+const POLL: SignedDuration = SignedDuration::from_millis(1);
+
 async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
     kestrel
         .register_integration(
@@ -50,7 +52,7 @@ async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
             REPOSITORY,
             &stub.base_url(),
             &[Direction::Inbound, Direction::Outbound],
-            SignedDuration::from_millis(1),
+            POLL,
         )
         .await;
 }
@@ -941,7 +943,7 @@ const PASSES: usize = 20;
 
 async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
     for _ in 0..PASSES {
-        kestrel.work_pass().await;
+        kestrel.advance(POLL.unsigned_abs()).await;
         if fired(kestrel, r#type, outcome).await.is_some() {
             return;
         }
@@ -951,7 +953,7 @@ async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
 
 async fn passed_until_opened(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
     for _ in 0..PASSES {
-        kestrel.work_pass().await;
+        kestrel.advance(POLL.unsigned_abs()).await;
         let workspaces = kestrel.workspaces("acme").await;
         if workspaces.len() >= count {
             return workspaces;

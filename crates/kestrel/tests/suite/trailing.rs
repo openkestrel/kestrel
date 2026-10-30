@@ -13,6 +13,7 @@ use kestrel::instance::{Git, Observed};
 use kestrel::link::Instruction;
 use kestrel::log::{ClosingReason, Entry, ToolStatus};
 use kestrel::scheduling::Occupied;
+use kestrel::work::{GAP, LEASE};
 use kestrel_scripted_agent::{
     BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, CHILD_SAID_IN_TURN, CHILD_SAID_WHILE_TRAILING,
     CHILD_TITLE, OTHER_MODEL, SAID_BY_SUBAGENT, SAID_WHILE_TRAILING, SUBAGENT, SUBAGENT_CALL,
@@ -1017,16 +1018,14 @@ async fn a_running_opencode_child_keeps_its_session_trailing_as_a_subagent_unit_
 
 #[tokio::test]
 async fn a_lapsed_supervisor_closes_its_open_tool_unresolved() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::CarriesAToolOver);
     kestrel.start(&session, supervisor.harness()).await;
     running(&kestrel, session.id, "trailing").await;
     supervisor.destroy();
-    kestrel
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    kestrel.advance((LEASE + GAP).unsigned_abs()).await;
     ended(&kestrel, session.id).await;
     let calls = tool_calls(&kestrel, &workspace).await;
     assert!(
@@ -1051,7 +1050,7 @@ async fn a_lapsed_supervisor_closes_its_open_adapter_units_unresolved() {
         ),
         (Script::AnswersWithSubagents, "subagent", SUBAGENT),
     ] {
-        let kestrel = Kestrel::boot().await;
+        let kestrel = Kestrel::stepped().await;
         let workspace = a_workspace(&kestrel).await;
         let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
         let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, script);
@@ -1060,9 +1059,7 @@ async fn a_lapsed_supervisor_closes_its_open_adapter_units_unresolved() {
         let before = listing_a_unit(&kestrel, session.id).await;
         let unit = &before["units"][0];
         supervisor.destroy();
-        kestrel
-            .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-            .await;
+        kestrel.advance((LEASE + GAP).unsigned_abs()).await;
         ended(&kestrel, session.id).await;
         let calls = tool_calls(&kestrel, &workspace).await;
         let unresolved: Vec<_> = calls
@@ -1135,7 +1132,7 @@ async fn supervisor_loss_does_not_record_an_already_recorded_call_again() {
     use kestrel::work::{Report, Reported};
     use support::link_client::Link;
 
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let supervisor =
@@ -1187,9 +1184,7 @@ async fn supervisor_loss_does_not_record_an_already_recorded_call_again() {
         )
         .await;
     assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
-    kestrel
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    kestrel.advance((LEASE + GAP).unsigned_abs()).await;
     ended(&kestrel, session.id).await;
     assert_eq!(
         serde_json::to_value(tool_calls(&kestrel, &workspace).await).unwrap(),
