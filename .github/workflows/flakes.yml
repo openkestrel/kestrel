@@ -34,6 +34,8 @@ jobs:
           shared-key: rust-dependencies
           save-if: false
 
+      - uses: ./.github/actions/fetch-dependencies
+
       - name: Run the suite until the time is up
         run: |
           set -o pipefail

@@ -1,0 +1,12 @@
+name: Fetch dependencies
+description: >-
+  Fetches what the restored cache is missing through the bounded retry, before a build asks the
+  registry for it. Cargo's own `net.retry` does not retry the sparse index's `config.json` fetch on
+  the pinned toolchain, so one connect timeout there otherwise fails the job (docs/agents/flakes.md).
+runs:
+  using: composite
+  steps:
+    - name: Fetch the dependencies the cache is missing
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: .github/scripts/retry.sh cargo fetch --locked

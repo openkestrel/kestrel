@@ -63,6 +63,8 @@ jobs:
         with:
           shared-key: rust-dependencies
 
+      - uses: ./.github/actions/fetch-dependencies
+
       # Each command matches the gate's, features included: one the gate runs differently here
       # leaves its dependencies uncached, and the gate compiles them on every run.
       - name: Build what the gate builds
@@ -144,6 +146,8 @@ jobs:
       - uses: ./.github/actions/pinned-rust
 
       - uses: Swatinem/rust-cache@v2
+
+      - uses: ./.github/actions/fetch-dependencies
 
       - name: Record the supervisor binary's size
         run: |

@@ -118,6 +118,8 @@ jobs:
           shared-key: rust-dependencies
           save-if: false
 
+      - uses: ./.github/actions/fetch-dependencies
+
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -153,6 +155,8 @@ jobs:
           shared-key: rust-dependencies
           save-if: false
 
+      - uses: ./.github/actions/fetch-dependencies
+
       - name: Build the binaries
         run: cargo build --locked --workspace
 
@@ -177,6 +181,8 @@ jobs:
         with:
           shared-key: rust-dependencies
           save-if: false
+
+      - uses: ./.github/actions/fetch-dependencies
 
       - name: Check executable helper preparation
         run: bash .github/scripts/test-helper-preparation.sh
@@ -204,6 +210,8 @@ jobs:
         with:
           shared-key: rust-dependencies
           save-if: false
+
+      - uses: ./.github/actions/fetch-dependencies
 
       - uses: actions/cache/restore@v4
         with:
@@ -354,6 +362,8 @@ jobs:
         with:
           shared-key: rust-dependencies
           save-if: false
+
+      - uses: ./.github/actions/fetch-dependencies
 
       - name: Compile the heavy suites
         run: .github/scripts/compile-suites.sh suites.tar.zst
