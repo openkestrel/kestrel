@@ -337,7 +337,8 @@ async fn a_vendor_code_error_fails_without_waiting_for_exit_and_late_or_malforme
 async fn disconnect_keeps_the_relay_running_but_its_absolute_deadline_expires_and_retention_ends_with_gone()
  {
     let scripts = vendor();
-    let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+    let kestrel = Kestrel::stepped_dispatching_with_programs(scripts.path()).await;
+    kestrel.go_live().await;
     named(&kestrel).await;
     let relay = started(&kestrel).await;
     let waiting = until(&kestrel, &relay, "awaiting_code").await;
@@ -349,10 +350,7 @@ async fn disconnect_keeps_the_relay_running_but_its_absolute_deadline_expires_an
     let (status, reread) = sent(reqwest::Client::new().get(address(&kestrel, &relay))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(reread, waiting);
-    kestrel
-        .database()
-        .expire_relay(relay["id"].as_str().unwrap())
-        .await;
+    kestrel.away_for(kestrel::sign_in::relay::DEADLINE);
     let expired = until(&kestrel, &relay, "expired").await;
     cleaned(&kestrel, &relay).await;
     let (status, refused) = sent(
@@ -377,10 +375,7 @@ async fn disconnect_keeps_the_relay_running_but_its_absolute_deadline_expires_an
     let (status, unchanged) = sent(reqwest::Client::new().delete(address(&kestrel, &relay))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(unchanged, expired);
-    kestrel
-        .database()
-        .age_relay_terminal_state(relay["id"].as_str().unwrap())
-        .await;
+    kestrel.away_for(std::time::Duration::from_secs(24 * 60 * 60));
     let (status, gone) = sent(reqwest::Client::new().get(address(&kestrel, &relay))).await;
     assert_eq!(status, StatusCode::GONE, "{gone}");
     let (status, _) = sent(

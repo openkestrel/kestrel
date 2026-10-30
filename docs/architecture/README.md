@@ -130,7 +130,7 @@ real implementation exists ([ADR-0022](../adr/0022-store-repository-traits-and-e
 | `Store` | `store/` | SQLite via sqlx. One repository module per aggregate, reached through `Tx`. |
 | `Log` | `log.rs` | The Transcript. Same database and transaction as `Store` ([ADR-0004](../adr/0004-store-and-log-are-one-transactional-domain.md)). |
 | `Fanout` | `fanout.rs` | The in-process hub a committed transaction, or a serve-role memory-only change, hands its touched resources to; only the Organization change stream subscribes. Everything else polls `Store`. |
-| `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. |
+| `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. Holds the `Clock` every reading of the time comes from: the system's, or a test's manual one. |
 | `Work` | `work.rs`, `scheduling.rs` | Enqueue, dispatch and explain slot requests, lease, reports, ending a Session. |
 | `Compute` | `compute/` | `Driver` enum over `Docker` and `LocalExec`, chosen once by `KESTREL_COMPUTE`. |
 
@@ -207,9 +207,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
 - **Test-driven work role and clock** ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)):
-  a stepped fixture runs the work role a pass at a time, but few tests have moved to it, and no
-  manual clock exists yet. The control plane still reads the wall clock directly, and tests still
-  backdate rows and poll against real-time deadlines.
+  a stepped fixture runs the work role a pass at a time on a manual clock, but few tests have
+  moved to it, so most still poll against real-time deadlines. Elapsing has no stepped test.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

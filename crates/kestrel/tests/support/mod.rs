@@ -296,6 +296,24 @@ pub struct Provisions {
 }
 
 impl Provisions {
+    /// No supervisor, and `path` ahead of the rest of `PATH` for the programs a relay runs.
+    fn programs(path: &Path) -> Self {
+        let mut paths = vec![path.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        Self {
+            driver: Driver::LocalExec(
+                LocalExec::running("/usr/bin/false")
+                    .with_path(std::env::join_paths(paths).unwrap()),
+            ),
+            harnesses: Vec::new(),
+            max_active_sessions: NonZeroUsize::new(2).unwrap(),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }
+    }
+
     fn local(supervisor: &Path, harnesses: &[(&str, &str)], maximum: usize) -> Self {
         Self {
             driver: Driver::LocalExec(LocalExec::running(supervisor)),
@@ -427,20 +445,15 @@ impl Kestrel {
     }
 
     pub async fn dispatching_with_programs(path: &Path) -> Self {
-        let mut paths = vec![path.to_path_buf()];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        Self::booted(Some(Provisions {
-            driver: Driver::LocalExec(
-                LocalExec::running("/usr/bin/false")
-                    .with_path(std::env::join_paths(paths).unwrap()),
-            ),
-            harnesses: Vec::new(),
-            max_active_sessions: NonZeroUsize::new(2).unwrap(),
-            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
-            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
-        }))
+        Self::booted(Some(Provisions::programs(path))).await
+    }
+
+    pub async fn stepped_dispatching_with_programs(path: &Path) -> Self {
+        Self::booted_at_pace(
+            Some(Provisions::programs(path)),
+            kestrel::presence::LEASE,
+            Pace::Stepped,
+        )
         .await
     }
 
@@ -713,8 +726,9 @@ impl Kestrel {
         )
     }
 
-    /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
-    /// lapse until it restarts as a whole control plane.
+    /// Serves the link with no work role behind it, on a clock that moves only as the test moves
+    /// it, so nothing sweeps a lease a test has let lapse until it restarts as a whole control
+    /// plane.
     pub async fn boot_serving_alone() -> Self {
         Self::boot_serving_at_github(kestrel::integration::github::API).await
     }
@@ -725,7 +739,7 @@ impl Kestrel {
 
     pub async fn boot_serving_with_webhook_base(api: &str, base: Option<String>) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
-        let store = Store::open(data_dir.path())
+        let store = Store::open_on(data_dir.path(), Clock::manual())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();

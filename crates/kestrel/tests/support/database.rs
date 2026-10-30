@@ -85,14 +85,6 @@ impl<'a> Database<'a> {
         pool.close().await;
     }
 
-    pub async fn age_relay_terminal_state(&self, id: &str) {
-        let pool = self.pool().await;
-        let past = Timestamp::now() - jiff::SignedDuration::from_secs(86401);
-        sqlx::query("UPDATE sign_in_relay SET finished_at = ?, snapshot = json_set(snapshot, '$.finished_at', ?) WHERE id = ?")
-            .bind(past.as_second()).bind(past.to_string()).bind(id).execute(&pool).await.unwrap();
-        pool.close().await;
-    }
-
     pub async fn relay_cleaned(&self, id: &str) -> bool {
         let pool = self.pool().await;
         let cleaned: bool = sqlx::query_scalar("SELECT cleaned FROM sign_in_relay WHERE id = ?")
@@ -182,23 +174,6 @@ impl<'a> Database<'a> {
             &[&Timestamp::now().to_string(), &session.id.to_string()],
         )
         .await;
-    }
-
-    pub async fn last_polled_at(&self, at: Timestamp) {
-        self.execute(
-            "UPDATE integration SET deliveries_read_from = ?, last_polled_at = ?, poll_due_at = ?",
-            &[
-                &at.to_string(),
-                &at.to_string(),
-                &Timestamp::now().to_string(),
-            ],
-        )
-        .await;
-    }
-
-    pub async fn expire_github_app_flows(&self) {
-        self.execute("UPDATE github_app_flow SET expires_at = '2000-01-01'", &[])
-            .await;
     }
 
     /// Records `count` labelled Events as already received and checkpointed, because recording

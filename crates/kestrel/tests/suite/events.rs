@@ -303,7 +303,7 @@ async fn another_installations_deliveries_are_not_this_integrations() {
 #[tokio::test]
 async fn deliveries_older_than_githubs_retention_are_reported_lost() {
     let stub = GithubStub::start();
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     kestrel.declare_organization("acme").await;
     kestrel
         .register_integration(
@@ -315,26 +315,16 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
             SignedDuration::from_hours(1),
         )
         .await;
+    kestrel.work_pass().await;
     polled(&stub, 1).await;
-    kestrel
-        .database()
-        .last_polled_at(Timestamp::now() - SignedDuration::from_hours(80))
-        .await;
+    kestrel.away_for(Duration::from_secs(80 * 60 * 60));
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let refusal = loop {
-        if let Some(refusal) = kestrel.integrations("acme").await[0]
-            .last_event_refusal
-            .clone()
-        {
-            break refusal;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "nothing said deliveries were lost"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    kestrel.work_pass().await;
+
+    let refusal = kestrel.integrations("acme").await[0]
+        .last_event_refusal
+        .clone()
+        .expect("nothing said deliveries were lost");
 
     assert_eq!(refusal.id, None);
     assert!(

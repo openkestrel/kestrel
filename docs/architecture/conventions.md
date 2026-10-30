@@ -74,11 +74,18 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   purpose, in `suite/stepped.rs` unless named: the lease sweep, retention, polling, firing,
   follow-ups, the idle seal, posting, the claim, held input, a supervisor's exit and archiving, with
   pull request learning in `pull_request.rs` and relays in `relay.rs`. Three have none: elapsing
-  waits on the manual clock, idle hints are a no-op in both drivers, and a sign-in test's only rival
-  is a restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
-  expires its own flow first. Stepping is opt-in until most of `suite` has moved. The
-  manual clock is not built yet: a stepped test still backdates a row for a due time, and one idle
-  longer than the sweep's 10 s gap between passes reads as time the control plane was away.
+  has yet to get one, idle hints are a no-op in both drivers, and a sign-in test's only rival is a
+  restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
+  expires its own flow first. Stepping is opt-in until most of `suite` has moved.
+- **A test moves time on the clock, never by backdating a row.** Everything in
+  `crates/kestrel/src` reads the time from the `Clock` that `Store` carries, which is `Timer`'s
+  (`suite/clock.rs` fails the build on any other reading). A stepped or serve-only control plane
+  keeps a manual clock that stands still between moves: `advance` is time the control plane was
+  present for, a work pass at least every `GAP` of it, and `away_for` is a gap ADR-0054's grace
+  sees. The first lease sweep has no pass to measure a gap from, so a test that is away while a
+  lease is held runs a pass first. A window too long to step, such as the idle day or retention's
+  30 days, is time away. A poll interval comes due only once the clock passes it, so a pass that
+  should poll again advances by it. Compute deadlines and the supervisor keep real time.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
   harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
