@@ -154,28 +154,6 @@ impl<'a> Database<'a> {
         .await;
     }
 
-    pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
-        self.execute(
-            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?",
-            &[&at.to_string(), &workspace.to_string()],
-        )
-        .await;
-    }
-
-    pub async fn backdate_entry(&self, workspace: WorkspaceId, seq: i64, at: Timestamp) {
-        let pool = self.pool().await;
-        sqlx::query(
-            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ? AND seq = ?",
-        )
-        .bind(at.to_string())
-        .bind(workspace.to_string())
-        .bind(seq)
-        .execute(&pool)
-        .await
-        .expect("the entry should backdate");
-        pool.close().await;
-    }
-
     pub async fn refuse_retention(&self) {
         self.execute(
             "CREATE TRIGGER refuse_retention BEFORE UPDATE ON transcript_entry WHEN OLD.kind = 'narration' AND json_extract(NEW.body, '$.type') = 'expired' BEGIN SELECT RAISE(ABORT, 'retention write failed'); END",
@@ -196,36 +174,12 @@ impl<'a> Database<'a> {
         .await;
     }
 
-    pub async fn receive_held_messages_at(&self, workspace: WorkspaceId, at: Timestamp) {
-        self.execute(
-            "UPDATE pending_message SET received_at = ? WHERE workspace_id = ? AND state = 'held'",
-            &[&at.to_string(), &workspace.to_string()],
-        )
-        .await;
-    }
-
-    pub async fn enqueue_at(&self, session: &Session, at: Timestamp) {
-        self.execute(
-            "UPDATE session SET enqueued_at = ? WHERE id = ?",
-            &[&at.to_string(), &session.id.to_string()],
-        )
-        .await;
-    }
-
     /// The `ended`/NULL row migration 0003 leaves behind for every Session predating kestrel
     /// scheduling; ending a Session through the store always records an exit.
     pub async fn end_without_an_exit(&self, session: &Session) {
         self.execute(
             "UPDATE session SET state = 'ended', ended_at = ?, exit = NULL WHERE id = ?",
             &[&Timestamp::now().to_string(), &session.id.to_string()],
-        )
-        .await;
-    }
-
-    pub async fn last_lease_sweep(&self, at: Timestamp) {
-        self.execute(
-            "INSERT INTO lease_sweep (id, last_pass_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_pass_at = excluded.last_pass_at",
-            &[&format!("{at:.9}")],
         )
         .await;
     }

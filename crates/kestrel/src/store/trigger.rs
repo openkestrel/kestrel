@@ -544,20 +544,6 @@ impl<'a> Triggers<'a> {
         Ok(due)
     }
 
-    pub async fn considered(&mut self, event: EventRecordId, at: Timestamp) -> Result<()> {
-        sqlx::query(
-            "UPDATE firing SET considered_at = ?
-             WHERE event_record_id = ? AND outcome = 'held'",
-        )
-        .bind(at.to_string())
-        .bind(event.to_string())
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("recording when the event {event} was last considered"))?;
-
-        Ok(())
-    }
-
     pub async fn still_held(&mut self, trigger: &Trigger, event: &Event) -> Result<bool> {
         Ok(sqlx::query(
             "SELECT 1 FROM firing

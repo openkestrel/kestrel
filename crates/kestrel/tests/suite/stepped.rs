@@ -390,10 +390,7 @@ async fn a_read_before_the_retention_pass_sees_an_old_thought_and_one_after_sees
         )
         .await;
     kestrel.stop_session(session.id).await;
-    kestrel
-        .database()
-        .backdate_transcript(workspace.id, "2020-02-01T00:00:00Z".parse().unwrap())
-        .await;
+    kestrel.away_for(Duration::from_secs(31 * 24 * 60 * 60));
     let thought = |entries: &[Entry]| {
         entries
             .iter()

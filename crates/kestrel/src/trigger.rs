@@ -27,7 +27,7 @@ const AT_A_TIME: usize = 32;
 
 /// How long a held request waits for an event before its work item is asked about again, so a
 /// missed event delays its start rather than stranding it.
-const RECONSIDER: SignedDuration = SignedDuration::from_mins(5);
+pub const RECONSIDER: SignedDuration = SignedDuration::from_mins(5);
 
 pub const AGENT_LABEL: &str = "agent:";
 

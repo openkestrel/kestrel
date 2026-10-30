@@ -2632,16 +2632,6 @@ impl Kestrel {
         link::start(&self.store, session, harness).await
     }
 
-    /// The only way to watch the periodic sweep find what a missed event would have.
-    pub async fn last_considered(&self, event: EventRecordId, at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.triggers()
-            .considered(event, at)
-            .await
-            .expect("the held firing should record when it was considered");
-        tx.commit().await.expect("the record should commit");
-    }
-
     /// Simulates the process going away: every role and every stream it was holding open stops
     /// at once, and the store is dropped rather than closed.
     pub async fn kill(self) -> Stopped {
