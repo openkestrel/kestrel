@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 
 use crate::declined::{Consequence, Constraint, Next, Reason, Resource, Step};
 use crate::domain::{
@@ -432,7 +432,7 @@ async fn idle(store: &Store) -> Result<Vec<WorkspaceId>> {
     let mut tx = store.begin().await?;
     let mut idle = Vec::new();
 
-    for workspace in tx.workspaces().idle(Timestamp::now() - IDLE).await? {
+    for workspace in tx.workspaces().idle(store.clock().now() - IDLE).await? {
         let holds_unpublished_work = match tx.workspaces().kept_instance(workspace.id).await? {
             Some(kept) => {
                 instance::unpublished(&workspace.checkout.repositories, kept.observed.as_deref())
@@ -1023,7 +1023,7 @@ mod tests {
             changing_options: Vec::new(),
             commands: Vec::new(),
             interrupting: None,
-            enqueued_at: Timestamp::now(),
+            enqueued_at: crate::timer::Clock::System.now(),
             started_at: None,
             ended_at: None,
             lease_expires_at: None,

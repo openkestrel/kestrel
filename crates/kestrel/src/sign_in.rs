@@ -108,16 +108,16 @@ pub struct Authentication {
 }
 
 impl Authentication {
-    pub fn unchecked(source: Source) -> Self {
+    pub fn unchecked(source: Source, now: Timestamp) -> Self {
         Self {
             state: State::Unchecked,
             source,
-            observed_at: Timestamp::now(),
+            observed_at: now,
             provider_check: None,
         }
     }
 
-    fn checked(checked: Checked) -> Self {
+    fn checked(checked: Checked, now: Timestamp) -> Self {
         Self {
             state: match checked.outcome {
                 Outcome::Accepted => State::CredentialAccepted,
@@ -126,7 +126,7 @@ impl Authentication {
                 }
             },
             source: Source::ProviderCheck,
-            observed_at: Timestamp::now(),
+            observed_at: now,
             provider_check: Some(checked),
         }
     }
@@ -216,8 +216,8 @@ pub async fn save(
         .filter(|checked| checked.outcome == Outcome::Unavailable)
         .map(|checked| checked.provider);
     let authentication = match checked {
-        Some(checked) => Authentication::checked(checked),
-        None => Authentication::unchecked(Source::Import),
+        Some(checked) => Authentication::checked(checked, store.clock().now()),
+        None => Authentication::unchecked(Source::Import, store.clock().now()),
     };
 
     let mut tx = store.begin().await?;

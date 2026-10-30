@@ -35,8 +35,8 @@ use crate::workspace;
 
 const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
 
-pub(crate) fn on_the_link(reached_at: Option<jiff::Timestamp>) -> bool {
-    reached_at.is_some_and(|reached| jiff::Timestamp::now().duration_since(reached) < ON_THE_LINK)
+pub(crate) fn on_the_link(reached_at: Option<jiff::Timestamp>, now: jiff::Timestamp) -> bool {
+    reached_at.is_some_and(|reached| now.duration_since(reached) < ON_THE_LINK)
 }
 
 pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";

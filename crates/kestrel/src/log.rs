@@ -1,3 +1,4 @@
+use crate::timer::Clock;
 use std::fmt;
 use std::str::FromStr;
 
@@ -220,11 +221,12 @@ pub struct TranscriptEntry {
 
 pub struct Log<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 impl<'a> Log<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     /// The state is read in the statement that appends rather than off the `Workspace` handed
@@ -233,7 +235,7 @@ impl<'a> Log<'a> {
         let kind = entry
             .kind()
             .context("expiry replaces an entry in place, never appends one")?;
-        let appended_at = Timestamp::now();
+        let appended_at = self.clock.now();
         let seq: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?",
         )

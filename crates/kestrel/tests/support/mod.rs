@@ -70,6 +70,7 @@ use kestrel::scheduling;
 use kestrel::sign_in::check::Providers;
 use kestrel::sign_in::credential_use::{self, CredentialUse};
 use kestrel::store::Store;
+use kestrel::timer::Clock;
 use kestrel::timer::Wake;
 use kestrel::trigger::{self, Against, Asked, Tested};
 use kestrel::work;
@@ -226,6 +227,16 @@ pub enum Pace {
     Stepped,
 }
 
+impl Pace {
+    /// A stepped control plane keeps time only as a test advances it (ADR-0059).
+    fn clock(self) -> Clock {
+        match self {
+            Self::Live => Clock::System,
+            Self::Stepped => Clock::manual(),
+        }
+    }
+}
+
 enum WorkRole {
     /// Running inside `roles`, beside serve.
     AllInOne,
@@ -348,6 +359,7 @@ pub struct Stopped {
     environment: Option<Provisions>,
     follow_lease: Duration,
     pace: Pace,
+    clock: Clock,
 }
 
 impl Kestrel {
@@ -516,6 +528,7 @@ impl Kestrel {
             environment,
             follow_lease,
             pace,
+            pace.clock(),
         )
         .await
     }
@@ -548,6 +561,7 @@ impl Kestrel {
             client_url(),
             Images::default(),
             Pace::Live,
+            Clock::System,
         )
         .await
     }
@@ -574,6 +588,7 @@ impl Kestrel {
             client,
             images,
             Pace::Live,
+            Clock::System,
         )
         .await
     }
@@ -584,7 +599,15 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
     ) -> Self {
-        Self::boot_paced(data_dir, listen, environment, follow_lease, Pace::Live).await
+        Self::boot_paced(
+            data_dir,
+            listen,
+            environment,
+            follow_lease,
+            Pace::Live,
+            Clock::System,
+        )
+        .await
     }
 
     async fn boot_paced(
@@ -593,6 +616,7 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
         pace: Pace,
+        clock: Clock,
     ) -> Self {
         Self::boot_checking(
             data_dir,
@@ -603,6 +627,7 @@ impl Kestrel {
             client_url(),
             Images::default(),
             pace,
+            clock,
         )
         .await
     }
@@ -620,8 +645,9 @@ impl Kestrel {
         client: url::Url,
         images: Images,
         pace: Pace,
+        clock: Clock,
     ) -> Self {
-        let store = Store::open(data_dir.path())
+        let store = Store::open_on(data_dir.path(), clock.clone())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
@@ -766,6 +792,29 @@ impl Kestrel {
                 )
             }
         }
+    }
+
+    /// Time the control plane was present for: a work pass at least every `GAP` of it, so the
+    /// lease sweep never reads it as time it was away (ADR-0059).
+    pub async fn advance(&self, by: Duration) {
+        let every = kestrel::work::GAP.unsigned_abs();
+        let mut left = by;
+        while !left.is_zero() {
+            let step = left.min(every);
+            self.store.clock().advance(step);
+            self.work_pass().await;
+            left -= step;
+        }
+    }
+
+    /// Time the control plane was away for, which its next lease sweep reads as a gap
+    /// (ADR-0054).
+    pub fn away_for(&self, by: Duration) {
+        self.store.clock().advance(by);
+    }
+
+    pub fn now(&self) -> Timestamp {
+        self.store.clock().now()
     }
 
     pub async fn go_live(&self) {
@@ -2589,6 +2638,7 @@ impl Kestrel {
             live.abort();
             let _ = live.await;
         }
+        let clock = self.store.clock().clone();
         drop(self.store);
 
         Stopped {
@@ -2598,6 +2648,7 @@ impl Kestrel {
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
+            clock,
         }
     }
 
@@ -2625,6 +2676,7 @@ impl Kestrel {
         )
         .await;
         self.cleanup.armed = false;
+        let clock = self.store.clock().clone();
         drop(self.store);
 
         Stopped {
@@ -2634,6 +2686,7 @@ impl Kestrel {
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
+            clock,
         }
     }
 }
@@ -2683,6 +2736,10 @@ impl Stopped {
         Database::at(self.data_dir.path())
     }
 
+    pub fn away_for(&self, by: Duration) {
+        self.clock.advance(by);
+    }
+
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
         Kestrel::boot_paced(
@@ -2691,6 +2748,7 @@ impl Stopped {
             self.environment,
             self.follow_lease,
             self.pace,
+            self.clock,
         )
         .await
     }
@@ -2720,12 +2778,13 @@ impl Stopped {
             }),
             self.follow_lease,
             self.pace,
+            self.clock,
         )
         .await
     }
 
     pub async fn session(&self, id: SessionId) -> Session {
-        let store = Store::open(self.data_dir.path())
+        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
             .await
             .expect("the database should still be there");
 
@@ -2737,7 +2796,7 @@ impl Stopped {
     /// A due time set while nothing is keeping time, so what fires it afterwards is a control
     /// plane that could only have read it back.
     pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
-        let store = Store::open(self.data_dir.path())
+        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
             .await
             .expect("the database should still be there");
         let mut tx = store.begin().await.expect("a transaction");
@@ -2751,7 +2810,7 @@ impl Stopped {
     /// Reaches the durable record while nothing is serving it, which is the only way to make
     /// an instruction that an Environment provably could not have been handed as it was sent.
     pub async fn instruct(&self, session: &Session, instruction: Instruction) {
-        let store = Store::open(self.data_dir.path())
+        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
             .await
             .expect("the database should still be there");
         link::instruct(&store, session, instruction)

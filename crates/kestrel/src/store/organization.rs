@@ -1,8 +1,8 @@
+use crate::timer::Clock;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
 use anyhow::{Context as _, Result};
-use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
@@ -15,14 +15,20 @@ use crate::store::{Declared, sign_in};
 
 pub struct Organizations<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     keyring: &'a Keyring,
 }
 
 impl<'a> Organizations<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, keyring: &'a Keyring) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        keyring: &'a Keyring,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             keyring,
+            clock,
         }
     }
 
@@ -60,7 +66,7 @@ impl<'a> Organizations<'a> {
         .bind(organization.id.to_string())
         .bind(&organization.name)
         .bind(max_live_instances.map(|limit| limit.get() as i64))
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("declaring the organization {name}"))?;
@@ -125,8 +131,8 @@ impl<'a> Organizations<'a> {
             .seal(&bound_to(organization, variable), secret)?;
         let held = Held {
             variable: variable.to_owned(),
-            set_at: Timestamp::now(),
-            revision: sign_in::mint(self.connection, authentication).await?,
+            set_at: self.clock.now(),
+            revision: sign_in::mint(self.connection, authentication, self.clock.now()).await?,
         };
 
         sqlx::query(

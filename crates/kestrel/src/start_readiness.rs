@@ -657,8 +657,6 @@ pub fn unchecked(sign_in: &SignIn) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use jiff::Timestamp;
-
     use super::*;
     use crate::domain::{OperatorId, OrganizationId, SubscriptionProfileId};
     use crate::sign_in::{Authentication, ModelUse, Source, UseSource};
@@ -688,11 +686,11 @@ mod tests {
             holding,
             revision,
             refreshed_from: None,
-            saved_at: Timestamp::now(),
+            saved_at: crate::timer::Clock::System.now(),
             authentication: Authentication {
                 state,
                 source: Source::Import,
-                observed_at: Timestamp::now(),
+                observed_at: crate::timer::Clock::System.now(),
                 provider_check: None,
             },
             model_use: Vec::new(),
@@ -901,7 +899,7 @@ mod tests {
             image: None,
             result: UseResult::NotCovered,
             source: UseSource::Session,
-            observed_at: Timestamp::now(),
+            observed_at: crate::timer::Clock::System.now(),
         });
         let sign_ins = [held];
         let with = |model: Option<&str>| Context {

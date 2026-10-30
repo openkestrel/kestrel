@@ -1,5 +1,5 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result};
-use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
@@ -31,14 +31,20 @@ enum Freshness {
 
 pub struct PullRequests<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     touched: &'a mut Touched,
 }
 
 impl<'a> PullRequests<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        touched: &'a mut Touched,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             touched,
+            clock,
         }
     }
 
@@ -162,7 +168,7 @@ impl<'a> PullRequests<'a> {
         .bind(event.organization.to_string())
         .bind(outcome)
         .bind(workspace)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| {

@@ -16,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{BoxError, Form, Json, Router};
 use futures_core::Stream;
-use jiff::SignedDuration;
+use jiff::{SignedDuration, Timestamp};
 use kestrel_operator_types as wire;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -2688,7 +2688,11 @@ async fn github_app_setup_finish(
 
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
-fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
+fn integration_record(
+    integration: Integration,
+    organization: &str,
+    now: Timestamp,
+) -> wire::Integration {
     let diagnostic = (!integration.enabled()).then(|| {
         diagnosis(
             integration::out_of_use(&integration, organization, "use_integration"),
@@ -2709,6 +2713,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
                         organization,
                         integration::rotation::RESUME,
                         rotation,
+                        now,
                     ),
                     None,
                 )
@@ -2804,7 +2809,13 @@ async fn integrations(
     Ok(Json(
         integrations
             .into_iter()
-            .map(|integration| integration_record(integration, &organization))
+            .map(|integration| {
+                integration_record(
+                    integration,
+                    &organization,
+                    control_plane.store.clock().now(),
+                )
+            })
             .collect(),
     ))
 }
@@ -2815,7 +2826,11 @@ async fn show_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let integration = integration::integration(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(integration, &organization)))
+    Ok(Json(integration_record(
+        integration,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 /// What identifies the connection; naming one in a change is refused rather than ignored.
@@ -2880,7 +2895,11 @@ async fn change_integration(
     )
     .await?;
 
-    Ok(Json(integration_record(changed, &organization)))
+    Ok(Json(integration_record(
+        changed,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -2929,7 +2948,11 @@ async fn disable_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let disabled = integration::disable(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(disabled, &organization)))
+    Ok(Json(integration_record(
+        disabled,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn enable_integration(
@@ -2938,7 +2961,11 @@ async fn enable_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let enabled = integration::enable(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(enabled, &organization)))
+    Ok(Json(integration_record(
+        enabled,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn retire_integration(
@@ -2955,7 +2982,11 @@ async fn retire_integration(
     )
     .await?;
 
-    Ok(Json(integration_record(retired, &organization)))
+    Ok(Json(integration_record(
+        retired,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn set_integration_webhook_url(
@@ -2975,7 +3006,11 @@ async fn set_integration_webhook_url(
         request.revision,
     )
     .await?;
-    Ok(Json(integration_record(changed, &organization)))
+    Ok(Json(integration_record(
+        changed,
+        &organization,
+        cp.store.clock().now(),
+    )))
 }
 
 async fn integration_webhook(
@@ -3013,7 +3048,11 @@ async fn rotate_integration_webhook_secret(
     )
     .await?;
 
-    Ok(Json(integration_record(rotated, &organization)))
+    Ok(Json(integration_record(
+        rotated,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn resume_integration_webhook_secret_rotation(
@@ -3028,7 +3067,11 @@ async fn resume_integration_webhook_secret_rotation(
     )
     .await?;
 
-    Ok(Json(integration_record(rotated, &organization)))
+    Ok(Json(integration_record(
+        rotated,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn replace_integration_private_key(
@@ -3047,7 +3090,11 @@ async fn replace_integration_private_key(
     )
     .await?;
 
-    Ok(Json(integration_record(replaced, &organization)))
+    Ok(Json(integration_record(
+        replaced,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 fn registration_name(registration: &wire::IntegrationRegistration) -> &str {
@@ -3129,7 +3176,11 @@ async fn register_integration(
 
     Ok((
         StatusCode::CREATED,
-        Json(integration_record(registered, &organization)),
+        Json(integration_record(
+            registered,
+            &organization,
+            control_plane.store.clock().now(),
+        )),
     ))
 }
 

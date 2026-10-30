@@ -11,6 +11,7 @@ use crate::domain::Usage;
 use crate::log::ToolStatus;
 use crate::store::Store;
 use crate::store::workspace::Linked;
+use crate::timer::Clock;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -79,9 +80,13 @@ struct Snapshot {
 }
 
 #[derive(Clone, Default)]
-pub struct Summaries(Arc<Mutex<HashMap<String, Live>>>);
+pub struct Summaries(Arc<Mutex<HashMap<String, Live>>>, Clock);
 
 impl Summaries {
+    pub fn on(clock: Clock) -> Self {
+        Self(Arc::default(), clock)
+    }
+
     pub fn connected(&self, instance: &str) -> Connection {
         let mut summaries = self.0.lock().unwrap();
         let live = summaries.entry(instance.to_owned()).or_default();
@@ -261,6 +266,7 @@ pub async fn read(
             .supervisor(&instance)
             .await?
             .and_then(|supervisor| supervisor.reached_at),
+        tx.now(),
     );
     let current = match summaries.get(&instance) {
         Some(summary) if on_the_link => Current::Reported { summary },
@@ -335,7 +341,7 @@ impl Summaries {
         let Some(live) = summaries.get_mut(instance) else {
             return false;
         };
-        let now = Timestamp::now();
+        let now = self.1.now();
         live.reached_at = Some(now);
         let held = Held {
             state: state.clone(),
@@ -368,7 +374,7 @@ impl Summaries {
         if let Some(live) = self.0.lock().unwrap().get_mut(instance)
             && live.streams > 0
         {
-            live.reached_at = Some(Timestamp::now());
+            live.reached_at = Some(self.1.now());
         }
     }
 
@@ -396,7 +402,8 @@ impl Summaries {
         let Some(held) = live.sessions.get(&session.id.to_string()) else {
             return unavailable;
         };
-        let on_the_link = live.streams > 0 && crate::link::on_the_link(live.reached_at);
+        let on_the_link =
+            live.streams > 0 && crate::link::on_the_link(live.reached_at, self.1.now());
         match held.snapshot {
             Some(snapshot) if on_the_link && snapshot.streams_opened == live.streams_opened => (
                 Observation::Current {

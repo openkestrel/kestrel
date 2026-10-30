@@ -89,6 +89,7 @@ pub async fn bind(
         link: link.local_addr()?,
         operator: operator.local_addr()?,
     };
+    let live = crate::live::Live::on(store.clock().clone());
 
     Ok(Listening {
         link,
@@ -102,7 +103,7 @@ pub async fn bind(
         github_app_api: crate::integration::github::API.into(),
         webhook_base: None,
         images: Images::default(),
-        live: crate::live::Live::default(),
+        live,
     })
 }
 
@@ -138,7 +139,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         let stop = stop_recording.clone();
         async move { unrecorded.record(&store, stop).await }
     });
-    let followers = crate::presence::Followers::new(follow_lease);
+    let followers = crate::presence::Followers::new(follow_lease, store.clock().clone());
     let link_router = link::router(
         store.clone(),
         crate::integration::github::Github::dialling_out(&store)?,

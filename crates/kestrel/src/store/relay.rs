@@ -1,3 +1,4 @@
+use crate::timer::Clock;
 use anyhow::Result;
 use jiff::Timestamp;
 use kestrel_operator_types as wire;
@@ -9,11 +10,12 @@ use crate::sign_in::relay::{Attempt, terminal};
 
 pub struct Relays<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 impl<'a> Relays<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     pub async fn open(&mut self, attempt: &Attempt) -> Result<()> {
@@ -87,7 +89,7 @@ impl<'a> Relays<'a> {
     ) -> Result<()> {
         let expected = attempt.view.version;
         attempt.view.version += 1;
-        attempt.view.finished_at = terminal(&progress).then(|| Timestamp::now().to_string());
+        attempt.view.finished_at = terminal(&progress).then(|| self.clock.now().to_string());
         attempt.view.progress = progress;
         let updated = sqlx::query("UPDATE sign_in_relay SET state = ?, version = ?, snapshot = ?, finished_at = ? WHERE id = ? AND version = ?")
             .bind(attempt.state()).bind(attempt.view.version)
@@ -107,7 +109,7 @@ impl<'a> Relays<'a> {
             AND state = 'saving' AND deadline > ?",
         )
         .bind(id)
-        .bind(Timestamp::now().as_second())
+        .bind(self.clock.now().as_second())
         .execute(&mut *self.connection)
         .await?
         .rows_affected()
@@ -153,7 +155,7 @@ impl<'a> Relays<'a> {
              (SELECT id FROM sign_in_relay WHERE finished_at <= ? AND cleaned = 1
               AND snapshot IS NOT NULL ORDER BY finished_at LIMIT 32)",
         )
-        .bind(Timestamp::now().as_second() - 86400)
+        .bind(self.clock.now().as_second() - 86400)
         .execute(&mut *self.connection)
         .await?;
         Ok(())
@@ -162,10 +164,11 @@ impl<'a> Relays<'a> {
 
 pub(crate) async fn cancel_slot(
     connection: &mut SqliteConnection,
+    clock: &Clock,
     profile: SubscriptionProfileId,
     entry: &Entry,
 ) -> Result<()> {
-    let mut relays = Relays::over(connection);
+    let mut relays = Relays::over(connection, clock);
     if let Some(mut attempt) = relays.active(profile, entry).await? {
         relays
             .update(

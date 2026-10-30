@@ -70,6 +70,7 @@ async fn deliver(
         (integration, verifier)
     };
 
+    let now = ingest.store.clock().now();
     let occurrence = match (&integration.connection, verifier) {
         (Connection::Github(connection), Verifier::Signing(secrets)) => {
             if !secrets.iter().any(|secret| signed(secret, &headers, &body)) {
@@ -89,7 +90,7 @@ async fn deliver(
             })?;
 
             Some(
-                github::delivered(connection, event, delivery, payload, Timestamp::now())
+                github::delivered(connection, event, delivery, payload, now)
                     .map_err(|error| Refused::BadRequest(error.to_string()))?,
             )
         }
@@ -97,7 +98,7 @@ async fn deliver(
             if !presented(&headers, &digest) {
                 return Err(Refused::Unauthenticated);
             }
-            Some(received(&integration, &headers, &body)?)
+            Some(received(&integration, &headers, &body, now)?)
         }
         _ => return Err(Refused::Unauthenticated),
     };
@@ -161,17 +162,18 @@ fn received(
     integration: &Integration,
     headers: &HeaderMap,
     body: &[u8],
+    now: Timestamp,
 ) -> Result<Occurrence, Refused> {
     let media = media_type(headers);
 
     if media == "application/cloudevents+json" {
-        structured(body)
+        structured(body, now)
     } else if media.starts_with("application/cloudevents") {
         Err(Refused::Unsupported(format!(
             "{media} is not a CloudEvents format kestrel reads"
         )))
     } else if headers.contains_key("ce-specversion") {
-        binary(headers, &media, body)
+        binary(headers, &media, body, now)
     } else {
         Ok(Occurrence {
             id: Uuid::now_v7().to_string(),
@@ -180,7 +182,7 @@ fn received(
             specversion: SPECVERSION.to_owned(),
             r#type: WRAPPED.to_owned(),
             subject: None,
-            time: Timestamp::now(),
+            time: now,
             data: data(&media, body)?,
         })
     }
@@ -200,7 +202,7 @@ struct Envelope {
     data_base64: Option<String>,
 }
 
-fn structured(body: &[u8]) -> Result<Occurrence, Refused> {
+fn structured(body: &[u8], now: Timestamp) -> Result<Occurrence, Refused> {
     let envelope: Envelope = serde_json::from_slice(body)
         .map_err(|error| Refused::BadRequest(format!("the body is not a CloudEvent: {error}")))?;
     if envelope.data_base64.is_some() {
@@ -215,12 +217,17 @@ fn structured(body: &[u8]) -> Result<Occurrence, Refused> {
         specversion: envelope.specversion,
         r#type: envelope.r#type,
         subject: envelope.subject,
-        time: envelope.time.unwrap_or_else(Timestamp::now),
+        time: envelope.time.unwrap_or(now),
         data: envelope.data,
     })
 }
 
-fn binary(headers: &HeaderMap, media: &str, body: &[u8]) -> Result<Occurrence, Refused> {
+fn binary(
+    headers: &HeaderMap,
+    media: &str,
+    body: &[u8],
+    now: Timestamp,
+) -> Result<Occurrence, Refused> {
     let attribute = |name: &str| -> Result<Option<String>, Refused> {
         headers
             .get(format!("ce-{name}"))
@@ -246,7 +253,7 @@ fn binary(headers: &HeaderMap, media: &str, body: &[u8]) -> Result<Occurrence, R
                     .map_err(|error| Refused::BadRequest(format!("ce-time: {error}")))
             })
             .transpose()?
-            .unwrap_or_else(Timestamp::now),
+            .unwrap_or(now),
         data: data(media, body)?,
     })
 }
@@ -362,6 +369,19 @@ mod tests {
 
     use super::*;
     use crate::domain::{IntegrationId, OrganizationId};
+    use crate::timer::Clock;
+
+    fn received(
+        integration: &Integration,
+        headers: &HeaderMap,
+        body: &[u8],
+    ) -> Result<Occurrence, Refused> {
+        super::received(integration, headers, body, Clock::System.now())
+    }
+
+    fn structured(body: &[u8]) -> Result<Occurrence, Refused> {
+        super::structured(body, Clock::System.now())
+    }
 
     fn a_webhook() -> Integration {
         Integration {

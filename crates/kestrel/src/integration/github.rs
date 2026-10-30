@@ -16,6 +16,7 @@ use crate::domain::{GithubConnection, Integration, IntegrationId, Occurrence};
 use crate::integration::credential::App;
 use crate::readiness::{Delegation, Readiness, WorkState};
 use crate::store::Store;
+use crate::timer::Clock;
 
 pub const API: &str = "https://api.github.com";
 
@@ -167,6 +168,7 @@ pub struct Github {
     /// Keyed by revision too: a token minted before a change is never handed out after it.
     tokens: Mutex<HashMap<(IntegrationId, i64), Minted>>,
     fence: Option<Store>,
+    clock: Clock,
 }
 
 impl Github {
@@ -210,6 +212,7 @@ impl Github {
             app_id: i64,
         }
         let installation: Installation = proven(
+            self.clock.now(),
             self.as_app(
                 reqwest::Method::GET,
                 app,
@@ -237,6 +240,7 @@ impl Github {
         per_page: u32,
     ) -> Result<Vec<AppInstallation>, Unproven> {
         proven(
+            self.clock.now(),
             self.as_app(
                 reqwest::Method::GET,
                 app,
@@ -265,6 +269,7 @@ impl Github {
             .pop_if_empty()
             .extend(["app", "installations", &id.to_string()]);
         let installation: AppInstallation = proven(
+            self.clock.now(),
             self.as_app(reqwest::Method::GET, app, url.as_str())
                 .map_err(Unproven::Unanswered)?,
             "the App installation",
@@ -285,6 +290,7 @@ impl Github {
     ) -> Result<InstalledRepository, Unproven> {
         let token = self.installation_token(api, app).await?;
         proven(
+            self.clock.now(),
             self.with_token(
                 reqwest::Method::GET,
                 &token,
@@ -300,8 +306,13 @@ impl Github {
     pub fn dialling_out(store: &Store) -> Result<Self> {
         Ok(Self {
             fence: Some(store.clone()),
+            clock: store.clock().clone(),
             ..Self::unfenced()?
         })
+    }
+
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     /// For calls made with a credential rather than a saved Integration, such as registration.
@@ -314,6 +325,7 @@ impl Github {
                 .context("building the client kestrel polls github with")?,
             tokens: Mutex::new(HashMap::new()),
             fence: None,
+            clock: Clock::System,
         })
     }
 
@@ -377,7 +389,7 @@ impl Github {
         github: &GithubConnection,
     ) -> Result<Minted, Refused> {
         self.still_current(integration).await?;
-        let fresh_enough = Timestamp::now() + SignedDuration::from_secs(EXPIRY_MARGIN);
+        let fresh_enough = self.clock.now() + SignedDuration::from_secs(EXPIRY_MARGIN);
         if let Some(minted) = self
             .tokens
             .lock()
@@ -392,7 +404,7 @@ impl Github {
             .mint(&github.api, &github.credential, Some(github.repository_id))
             .await?;
         self.still_current(integration).await?;
-        let now = Timestamp::now();
+        let now = self.clock.now();
         let mut tokens = self.tokens.lock().expect("the token cache is not poisoned");
         tokens.retain(|(id, revision), cached| {
             (*id != integration.id || *revision == integration.revision) && cached.expires_at > now
@@ -431,7 +443,8 @@ impl Github {
             ))
         })?;
 
-        let minted: MintedToken = answered(response, "an installation token").await?;
+        let minted: MintedToken =
+            answered(self.clock.now(), response, "an installation token").await?;
         Ok(Minted {
             token: minted.token,
             expires_at: minted.expires_at,
@@ -461,6 +474,7 @@ impl Github {
 
         let token = self.installation_token(&connection.api, app).await?;
         let named: Named = proven(
+            self.clock.now(),
             self.with_token(
                 reqwest::Method::GET,
                 &token,
@@ -517,7 +531,7 @@ impl Github {
                 ))
             })?;
         let status = response.status();
-        if let Some(until) = rate_limited(status, response.headers()) {
+        if let Some(until) = rate_limited(status, response.headers(), self.clock.now()) {
             return Err(Unproven::RateLimited { until });
         }
 
@@ -573,7 +587,7 @@ impl Github {
             .send()
             .await
             .map_err(|error| Unset::Unanswered(error.into()))?;
-        if let Some(until) = rate_limited(response.status(), response.headers()) {
+        if let Some(until) = rate_limited(response.status(), response.headers(), self.clock.now()) {
             return Err(Unset::RateLimited { until });
         }
         match response.status() {
@@ -621,7 +635,7 @@ impl Github {
                 ))
             })?;
         let status = response.status();
-        if let Some(until) = rate_limited(status, response.headers()) {
+        if let Some(until) = rate_limited(status, response.headers(), self.clock.now()) {
             return Err(Unset::RateLimited { until });
         }
 
@@ -657,6 +671,7 @@ impl Github {
     ) -> Result<Installed, Unproven> {
         let token = self.installation_token(api, app).await?;
         proven(
+            self.clock.now(),
             self.with_token(
                 reqwest::Method::GET,
                 &token,
@@ -670,8 +685,9 @@ impl Github {
     }
 
     async fn installation_token(&self, api: &str, app: &App) -> Result<String, Unproven> {
-        app_jwt(app).map_err(|_| Unproven::Unreadable)?;
+        app_jwt(app, self.clock.now()).map_err(|_| Unproven::Unreadable)?;
         let minted: MintedToken = proven(
+            self.clock.now(),
             self.as_app(
                 reqwest::Method::POST,
                 app,
@@ -718,7 +734,7 @@ impl Github {
             .await
             .context("the app's own identity could not be read")?;
 
-        let app_record: AppRecord = answered(response, "the app's own identity")
+        let app_record: AppRecord = answered(self.clock.now(), response, "the app's own identity")
             .await
             .map_err(|refused| anyhow!("{refused}"))?;
 
@@ -746,7 +762,7 @@ impl Github {
             .send()
             .await
             .with_context(|| format!("{repository} could not be read"))?;
-        let named: Named = answered(response, repository)
+        let named: Named = answered(self.clock.now(), response, repository)
             .await
             .map_err(|refused| anyhow!("{refused}"))?;
 
@@ -778,7 +794,8 @@ impl Github {
                     Refused::Failed(anyhow!("the app's deliveries could not be listed: {error}"))
                 })?;
             let next = next_page(response.headers());
-            let page: Vec<Listed> = answered(response, "the app's deliveries").await?;
+            let page: Vec<Listed> =
+                answered(self.clock.now(), response, "the app's deliveries").await?;
             newest = newest.or_else(|| page.iter().map(|listed| listed.delivered_at).max());
             let reached = page.iter().any(|listed| listed.delivered_at < from);
             newest_first.extend(page.into_iter().filter(|listed| {
@@ -835,7 +852,7 @@ impl Github {
             .send()
             .await
             .map_err(|error| Refused::Failed(anyhow!("{asked_for} could not be read: {error}")))?;
-        let delivery: Delivered = answered(response, &asked_for).await?;
+        let delivery: Delivered = answered(self.clock.now(), response, &asked_for).await?;
         let payload = delivery
             .request
             .payload
@@ -862,7 +879,7 @@ impl Github {
             .request(method, url)
             .header("accept", "application/vnd.github+json")
             .header("x-github-api-version", VERSION)
-            .bearer_auth(app_jwt(app)?))
+            .bearer_auth(app_jwt(app, self.clock.now())?))
     }
 
     /// The comment kestrel leaves on the issue the work came from. What comes back is where
@@ -891,7 +908,12 @@ impl Github {
                 ))
             })?;
 
-        answered(response, &format!("a comment on {repository}#{subject}")).await
+        answered(
+            self.clock.now(),
+            response,
+            &format!("a comment on {repository}#{subject}"),
+        )
+        .await
     }
 
     /// Whether a comment carrying `marker` is already on the issue. `since` bounds the read to
@@ -923,8 +945,12 @@ impl Github {
                 ))
             })?;
 
-        let comments: Vec<Comment> =
-            answered(response, &format!("the comments on {repository}#{subject}")).await?;
+        let comments: Vec<Comment> = answered(
+            self.clock.now(),
+            response,
+            &format!("the comments on {repository}#{subject}"),
+        )
+        .await?;
 
         Ok(comments
             .into_iter()
@@ -951,7 +977,12 @@ impl Github {
                 Refused::Failed(anyhow!("{repository}#{number} could not be read: {error}"))
             })?;
 
-        answered(response, &format!("{repository}#{number}")).await
+        answered(
+            self.clock.now(),
+            response,
+            &format!("{repository}#{number}"),
+        )
+        .await
     }
 
     pub async fn pull_request(
@@ -976,7 +1007,12 @@ impl Github {
                 ))
             })?;
 
-        answered(response, &format!("pull request {number} on {repository}")).await
+        answered(
+            self.clock.now(),
+            response,
+            &format!("pull request {number} on {repository}"),
+        )
+        .await
     }
 
     pub async fn readiness(
@@ -1041,8 +1077,12 @@ impl Github {
                                 "the command on {work_item} could not be read: {error}"
                             ))
                         })?;
-                    let comment: serde_json::Value =
-                        answered(response, &format!("the command on {work_item}")).await?;
+                    let comment: serde_json::Value = answered(
+                        self.clock.now(),
+                        response,
+                        &format!("the command on {work_item}"),
+                    )
+                    .await?;
                     evidence.push(format!("{work_item}#issuecomment-{id}"));
                     let original = EventData::new(occurrence);
                     let actor = original.actor();
@@ -1090,8 +1130,12 @@ impl Github {
                 .send()
                 .await
                 .map_err(|error| Refused::Failed(anyhow!("the blockers on {work_item} could not be read: {error}")))?;
-            let blockers: Vec<serde_json::Value> =
-                answered(response, &format!("the blockers on {work_item}")).await?;
+            let blockers: Vec<serde_json::Value> = answered(
+                self.clock.now(),
+                response,
+                &format!("the blockers on {work_item}"),
+            )
+            .await?;
             for blocker in &blockers {
                 let url = blocker
                     .get("html_url")
@@ -1155,8 +1199,8 @@ struct AppClaims {
 
 /// Signed fresh for every mint: GitHub accepts an App JWT for ten minutes at most, well short
 /// of the hour an installation token lasts, so nothing is gained by caching the JWT itself.
-fn app_jwt(app: &App) -> Result<String> {
-    let now = Timestamp::now().as_second();
+fn app_jwt(app: &App, now: Timestamp) -> Result<String> {
+    let now = now.as_second();
     let claims = AppClaims {
         // A few seconds behind the control plane's own clock, as GitHub's docs ask, so a
         // JWT is never rejected for arriving at a moment that, to GitHub, is still its past.
@@ -1189,9 +1233,13 @@ struct AppRecord {
     slug: String,
 }
 
-async fn answered<T: DeserializeOwned>(response: Response, asked_for: &str) -> Result<T, Refused> {
+async fn answered<T: DeserializeOwned>(
+    now: Timestamp,
+    response: Response,
+    asked_for: &str,
+) -> Result<T, Refused> {
     let status = response.status();
-    if let Some(until) = rate_limited(status, response.headers()) {
+    if let Some(until) = rate_limited(status, response.headers(), now) {
         return Err(Refused::RateLimited { until });
     }
     if !status.is_success() {
@@ -1209,6 +1257,7 @@ async fn answered<T: DeserializeOwned>(response: Response, asked_for: &str) -> R
 
 /// `denied` is what a refusal means for the thing asked for; a 401 is always the key.
 async fn proven<T: DeserializeOwned>(
+    now: Timestamp,
     request: reqwest::RequestBuilder,
     asked_for: &str,
     denied: Unproven,
@@ -1219,7 +1268,7 @@ async fn proven<T: DeserializeOwned>(
         ))
     })?;
     let status = response.status();
-    if let Some(until) = rate_limited(status, response.headers()) {
+    if let Some(until) = rate_limited(status, response.headers(), now) {
         return Err(Unproven::RateLimited { until });
     }
     match status {
@@ -1247,13 +1296,13 @@ async fn proven<T: DeserializeOwned>(
 
 /// Both of the ways GitHub says to come back later: the reset moment on an exhausted quota,
 /// and the seconds a secondary limit asks for.
-fn rate_limited(status: StatusCode, headers: &HeaderMap) -> Option<Timestamp> {
+fn rate_limited(status: StatusCode, headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
     if status != StatusCode::FORBIDDEN && status != StatusCode::TOO_MANY_REQUESTS {
         return None;
     }
 
     if let Some(seconds) = number(headers.get("retry-after")) {
-        return Some(Timestamp::now() + jiff::SignedDuration::from_secs(seconds.max(0)));
+        return Some(now + jiff::SignedDuration::from_secs(seconds.max(0)));
     }
     if number(headers.get("x-ratelimit-remaining")) == Some(0) {
         return number(headers.get("x-ratelimit-reset"))
@@ -1405,6 +1454,7 @@ pub fn dispatched(
     r#type: &str,
     issue: i64,
     data: serde_json::Value,
+    now: Timestamp,
 ) -> Occurrence {
     Occurrence {
         id: uuid::Uuid::now_v7().to_string(),
@@ -1412,7 +1462,7 @@ pub fn dispatched(
         specversion: "1.0".to_owned(),
         r#type: r#type.to_owned(),
         subject: Some(format!("#{issue}")),
-        time: Timestamp::now(),
+        time: now,
         data,
     }
 }
@@ -1556,6 +1606,7 @@ mod tests {
                 ("x-ratelimit-remaining", "0"),
                 ("x-ratelimit-reset", "1789000000"),
             ]),
+            crate::timer::Clock::System.now(),
         );
 
         assert_eq!(until, Timestamp::from_second(1_789_000_000).ok());
@@ -1566,10 +1617,11 @@ mod tests {
         let until = rate_limited(
             StatusCode::TOO_MANY_REQUESTS,
             &headers(&[("retry-after", "60")]),
+            crate::timer::Clock::System.now(),
         )
         .expect("a retry-after is a rate limit");
 
-        assert!(until > Timestamp::now() + jiff::SignedDuration::from_secs(50));
+        assert!(until > crate::timer::Clock::System.now() + jiff::SignedDuration::from_secs(50));
     }
 
     #[test]
@@ -1577,7 +1629,8 @@ mod tests {
         assert_eq!(
             rate_limited(
                 StatusCode::FORBIDDEN,
-                &headers(&[("x-ratelimit-remaining", "4999")])
+                &headers(&[("x-ratelimit-remaining", "4999")]),
+                crate::timer::Clock::System.now(),
             ),
             None
         );
@@ -1661,7 +1714,7 @@ mod tests {
             "issue_comment",
             "d-2",
             payload,
-            Timestamp::now(),
+            crate::timer::Clock::System.now(),
         )
         .unwrap();
 
@@ -1682,7 +1735,7 @@ mod tests {
             "issue_comment",
             "d-3",
             payload,
-            Timestamp::now(),
+            crate::timer::Clock::System.now(),
         )
         .unwrap();
 
@@ -1747,7 +1800,7 @@ mod tests {
                 "issue": { "number": 43, "author_association": "NONE" },
                 "sender": { "login": "jtmthf" },
             }),
-            Timestamp::now(),
+            crate::timer::Clock::System.now(),
         )
         .expect("a comment")
     }
@@ -1813,7 +1866,16 @@ mod tests {
             "repository": { "full_name": "someone/else" }
         });
 
-        assert!(delivered(&watching(), "issues", "d-4", payload, Timestamp::now()).is_err());
+        assert!(
+            delivered(
+                &watching(),
+                "issues",
+                "d-4",
+                payload,
+                crate::timer::Clock::System.now()
+            )
+            .is_err()
+        );
     }
 
     #[test]

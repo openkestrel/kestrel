@@ -56,7 +56,7 @@ impl Fixture {
             let mut tx = store.begin().await.unwrap();
             let session = tx
                 .workspaces()
-                .claim_session(&queued, Timestamp::now() + LEASE, false)
+                .claim_session(&queued, store.clock().now() + LEASE, false)
                 .await
                 .unwrap()
                 .expect("the fixture's session should claim");
@@ -521,7 +521,7 @@ async fn a_report_is_accepted_after_its_lease_passes_until_the_sweep_ends_it() {
     tx.workspaces()
         .hold_lease(
             &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
+            crate::timer::Clock::System.now() - SignedDuration::from_secs(1),
         )
         .await
         .unwrap();
@@ -544,7 +544,7 @@ async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_th
     tx.workspaces()
         .hold_lease(
             &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
+            crate::timer::Clock::System.now() - SignedDuration::from_secs(1),
         )
         .await
         .unwrap();
@@ -948,7 +948,7 @@ async fn idle_hint_does_not_escape_a_rolled_back_ending() {
 #[test]
 fn idle_hint_is_ignored_by_both_drivers() {
     use crate::compute::{Docker, Driver, IdleHint, LocalExec};
-    let now = Timestamp::now();
+    let now = crate::timer::Clock::System.now();
     for driver in [
         Driver::Docker(Docker::provisioning_from("unused")),
         Driver::LocalExec(LocalExec::running("unused")),
@@ -1001,7 +1001,7 @@ async fn a_heartbeat_renews_only_the_live_session_it_names_on_its_instance() {
     tx.workspaces()
         .hold_lease(
             &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
+            crate::timer::Clock::System.now() - SignedDuration::from_secs(1),
         )
         .await
         .unwrap();
@@ -1012,7 +1012,7 @@ async fn a_heartbeat_renews_only_the_live_session_it_names_on_its_instance() {
             .await
             .unwrap()
             .lease_expires_at
-            > Some(Timestamp::now())
+            > Some(crate::timer::Clock::System.now())
     );
     fail(&fixture.store, &fixture.session, "stopped")
         .await

@@ -1,7 +1,7 @@
 //! The in-process wheel (ADR-0005). The schedule is never in process memory alone, so a
 //! control plane that restarts finds every due time set before it existed and fires it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -23,6 +23,64 @@ use crate::workspace;
 
 const SWEEP: Duration = Duration::from_millis(500);
 const RETENTION_SWEEP: Duration = Duration::from_secs(60 * 60);
+
+/// What every reading of the time in the control plane comes from (ADR-0059): the system clock,
+/// or a manual one a test advances. The manual clock's wall time stands still between advances,
+/// while its monotonic time keeps the runtime's pace, so I/O paced in real time still moves.
+#[derive(Clone, Default)]
+pub enum Clock {
+    #[default]
+    System,
+    Manual(Arc<Mutex<Manual>>),
+}
+
+pub struct Manual {
+    at: Timestamp,
+    advanced: Duration,
+}
+
+impl Clock {
+    /// Starts where the system clock is, so what a test compares against a literal date still
+    /// reads as recent.
+    pub fn manual() -> Self {
+        Self::Manual(Arc::new(Mutex::new(Manual {
+            at: Timestamp::now(),
+            advanced: Duration::ZERO,
+        })))
+    }
+
+    pub fn now(&self) -> Timestamp {
+        match self {
+            Self::System => Timestamp::now(),
+            Self::Manual(manual) => manual.lock().unwrap_or_else(PoisonError::into_inner).at,
+        }
+    }
+
+    pub fn instant(&self) -> tokio::time::Instant {
+        match self {
+            Self::System => tokio::time::Instant::now(),
+            Self::Manual(manual) => {
+                tokio::time::Instant::now()
+                    + manual
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .advanced
+            }
+        }
+    }
+
+    /// # Panics
+    ///
+    /// On the system clock, which only time moves.
+    pub fn advance(&self, by: Duration) {
+        let Self::Manual(manual) = self else {
+            panic!("only a manual clock is advanced");
+        };
+        let mut manual = manual.lock().unwrap_or_else(PoisonError::into_inner);
+        manual.at += by;
+        manual.advanced += by;
+    }
+}
 
 /// Starts the sweeps that consume Events now rather than at their next tick. It reaches only a
 /// work role in the same process; across processes the sweep interval is the guarantee.
@@ -145,7 +203,7 @@ async fn learning_pull_requests(store: &Store, github: &Github) {
 }
 
 async fn elapsing(store: &Store, wake: &Wake) {
-    match trigger::elapse(store, Timestamp::now()).await {
+    match trigger::elapse(store, store.clock().now()).await {
         Ok(minted) => {
             for occurrence in &minted {
                 info!(source = occurrence.source, due = %occurrence.time, "a schedule elapsed");
@@ -283,7 +341,7 @@ async fn sweep(
     let mut expired = Vec::new();
     let mut closed = Vec::new();
 
-    let now = Timestamp::now();
+    let now = tx.now();
     if let Some(gap) = tx.lease_sweep().record_pass(now).await? {
         warn!(start = %gap.start, end = %gap.end, "the control plane was not running");
         tx.workspaces().grace_leases(now + work::GRACE).await?;
@@ -330,7 +388,8 @@ async fn sweep(
 async fn post_due(store: &Store, github: &Github) -> Result<()> {
     let due = {
         let mut tx = store.begin().await?;
-        tx.integrations().posts_due(Timestamp::now()).await?
+        let now = tx.now();
+        tx.integrations().posts_due(now).await?
     };
 
     for due in due {
@@ -354,7 +413,8 @@ async fn poll(store: &Store, github: &Github) -> Result<()> {
     github.forget_unused().await?;
     let due = {
         let mut tx = store.begin().await?;
-        tx.integrations().due(Timestamp::now()).await?
+        let now = tx.now();
+        tx.integrations().due(now).await?
     };
 
     for integration in due {
@@ -372,7 +432,8 @@ async fn poll(store: &Store, github: &Github) -> Result<()> {
 
 pub async fn expire_transcript(store: &Store) -> Result<usize> {
     let mut tx = store.begin().await?;
-    let expired = tx.log().expire(Timestamp::now()).await?;
+    let now = tx.now();
+    let expired = tx.log().expire(now).await?;
     tx.commit().await?;
     Ok(expired)
 }

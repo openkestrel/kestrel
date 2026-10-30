@@ -1,5 +1,5 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result, bail};
-use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
@@ -12,14 +12,20 @@ use crate::store::{Declared, sign_in};
 
 pub struct Profiles<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     keyring: &'a Keyring,
 }
 
 impl<'a> Profiles<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, keyring: &'a Keyring) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        keyring: &'a Keyring,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             keyring,
+            clock,
         }
     }
 
@@ -71,7 +77,7 @@ impl<'a> Profiles<'a> {
         .bind(&profile.name)
         .bind(&profile.owner)
         .bind(profile.owner_operator.map(|id| id.to_string()))
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("declaring the subscription profile {name}"))?;
@@ -147,12 +153,12 @@ impl<'a> Profiles<'a> {
         secret: &str,
         authentication: &Authentication,
     ) -> Result<Held> {
-        super::relay::cancel_slot(self.connection, profile.id, entry).await?;
+        super::relay::cancel_slot(self.connection, self.clock, profile.id, entry).await?;
         let sealed = self.keyring.seal(&bound_to(profile, entry), secret)?;
         let held = Held {
             entry: entry.clone(),
-            set_at: Timestamp::now(),
-            revision: sign_in::mint(self.connection, authentication).await?,
+            set_at: self.clock.now(),
+            revision: sign_in::mint(self.connection, authentication, self.clock.now()).await?,
         };
 
         sqlx::query(
@@ -260,14 +266,14 @@ impl<'a> Profiles<'a> {
             return Ok(None);
         }
         let sealed = self.keyring.seal(&bound_to(profile, entry), contents)?;
-        let revision = sign_in::mint_refreshed(self.connection, from).await?;
+        let revision = sign_in::mint_refreshed(self.connection, from, self.clock.now()).await?;
         sqlx::query(
             "UPDATE subscription_profile_entry
              SET sealed = ?, set_at = ?, revision = ?
              WHERE profile_id = ? AND kind = ? AND name = ? AND revision = ?",
         )
         .bind(sealed)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(revision)
         .bind(profile.id.to_string())
         .bind(entry.kind.as_str())

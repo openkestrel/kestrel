@@ -1,5 +1,5 @@
+use crate::timer::Clock;
 use anyhow::{Result, bail};
-use jiff::Timestamp;
 use kestrel_operator_types::{GithubAppFlow, GithubAppFlowPhase};
 use sqlx::{Row, SqliteConnection};
 
@@ -8,6 +8,7 @@ use crate::keyring::Keyring;
 
 pub struct AppFlows<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     keyring: &'a Keyring,
 }
 
@@ -17,10 +18,15 @@ pub struct Held {
 }
 
 impl<'a> AppFlows<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, keyring: &'a Keyring) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        keyring: &'a Keyring,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             keyring,
+            clock,
         }
     }
 
@@ -38,7 +44,7 @@ impl<'a> AppFlows<'a> {
     pub async fn expire(&mut self, state: Option<&str>) -> Result<()> {
         sqlx::query("UPDATE github_app_flow SET phase = 'expired', configuration_sealed = NULL, outcome = json_set(outcome, '$.phase', 'expired', '$.guidance', ?) WHERE state IN (SELECT state FROM github_app_flow WHERE expires_at <= ? AND phase != 'expired' AND (? IS NULL OR state = ?) ORDER BY expires_at LIMIT 32)")
             .bind("Setup expired. Start again; delete or uninstall an abandoned App manually in GitHub settings.")
-            .bind(crate::store::due(Timestamp::now())).bind(state).bind(state)
+            .bind(crate::store::due(self.clock.now())).bind(state).bind(state)
             .execute(&mut *self.connection).await?;
         Ok(())
     }

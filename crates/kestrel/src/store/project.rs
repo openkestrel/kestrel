@@ -1,5 +1,5 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result};
-use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
@@ -9,11 +9,12 @@ use crate::store::Declared;
 
 pub struct Projects<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 impl<'a> Projects<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     pub async fn declare(
@@ -47,7 +48,7 @@ impl<'a> Projects<'a> {
                 .bind(project.organization.to_string())
                 .bind(&project.name)
                 .bind(&project.branch)
-                .bind(Timestamp::now().to_string())
+                .bind(self.clock.now().to_string())
                 .execute(&mut *self.connection)
                 .await
                 .with_context(|| format!("declaring the project {name}"))?;

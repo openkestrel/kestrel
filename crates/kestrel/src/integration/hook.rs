@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use jiff::Timestamp;
 
 use crate::declined::{Again, Constraint, Next, Reason, Resource, Step};
 use crate::domain::Integration;
@@ -56,7 +57,13 @@ pub async fn set_url(
     }
     hook_maintainable(store, &read, organization, SET_URL).await?;
     if let Some(rotation) = &read.rotation {
-        bail!(rotation::unrotated(&read, organization, SET_URL, rotation));
+        bail!(rotation::unrotated(
+            &read,
+            organization,
+            SET_URL,
+            rotation,
+            store.clock().now(),
+        ));
     }
     if !tx.integrations().signs_webhooks(&read).await? {
         bail!(Reason::Forbidden {
@@ -95,7 +102,9 @@ pub async fn set_url(
     github
         .set_hook_url(&connection.api, &connection.credential, &url)
         .await
-        .map_err(|error| unavailable(&current, organization, SET_URL, error))?;
+        .map_err(|error| {
+            unavailable(&current, organization, SET_URL, error, store.clock().now())
+        })?;
 
     let mut tx = store.begin().await?;
     let changed = tx.integrations().with_id(read.id).await?;
@@ -138,11 +147,11 @@ pub async fn status(
     let hook = github
         .hook(connection)
         .await
-        .map_err(|error| unavailable(&read, organization, READ, error))?;
+        .map_err(|error| unavailable(&read, organization, READ, error, store.clock().now()))?;
     let deliveries = github
         .recent_deliveries(connection)
         .await
-        .map_err(|error| unavailable(&read, organization, READ, error))?;
+        .map_err(|error| unavailable(&read, organization, READ, error, store.clock().now()))?;
     let current = integration(store, organization, name).await?;
     if current.revision != read.revision {
         bail!(revised(
@@ -177,6 +186,7 @@ fn unavailable(
     organization: &str,
     operation: &'static str,
     error: Unset,
+    now: Timestamp,
 ) -> Reason {
     let unavailable = |retry_after_seconds, message: &str| Reason::GithubUnavailable {
         operation,
@@ -190,12 +200,7 @@ fn unavailable(
     let (state, message) = match error {
         Unset::RateLimited { until } => {
             return unavailable(
-                Some(
-                    until
-                        .duration_since(jiff::Timestamp::now())
-                        .as_secs()
-                        .max(1),
-                ),
+                Some(until.duration_since(now).as_secs().max(1)),
                 "GitHub is rate limiting hook requests; inspect the hook after the wait. Polling continues.",
             );
         }

@@ -25,9 +25,9 @@ use crate::workspace;
 /// A supervisor cannot say it is alive while the control plane is not listening, so this
 /// outlasts a restart under a live one by enough that an upgrade does not reap the Sessions it
 /// was carrying; a dead supervisor holds a Workspace's active-Session slot until it is up.
-pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
-pub(crate) const GAP: SignedDuration = SignedDuration::from_secs(10);
-pub(crate) const GRACE: SignedDuration = SignedDuration::from_secs(30);
+pub const LEASE: SignedDuration = SignedDuration::from_mins(2);
+pub const GAP: SignedDuration = SignedDuration::from_secs(10);
+pub const GRACE: SignedDuration = SignedDuration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -727,7 +727,7 @@ pub async fn report(
             let mut tx = store.begin().await?;
             tx.workspaces().record_reached(instance).await?;
             tx.workspaces()
-                .hold_lease_on(instance, session, Timestamp::now() + LEASE)
+                .hold_lease_on(instance, session, store.clock().now() + LEASE)
                 .await?;
             tx.commit().await?;
             debug!(instance, "a supervisor reported itself alive");
@@ -985,8 +985,9 @@ async fn reported(
                 if !said.is_empty() {
                     post::record_turn(tx, session, &workspace, turn, &said).await?;
                 }
+                let now = tx.now();
                 tx.workspaces()
-                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .record_active(session.organization, session.workspace, now)
                     .await?;
                 record_usage(tx, session, usage.as_ref()).await?;
                 handoff::worked(tx, session).await?;
@@ -1013,8 +1014,9 @@ async fn reported(
                 SessionState::Waiting
             };
             if tx.workspaces().answer_turn(session, then).await?.is_some() {
+                let now = tx.now();
                 tx.workspaces()
-                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .record_active(session.organization, session.workspace, now)
                     .await?;
             }
             // The slot the interrupted Turn held goes straight to what is held for it, so the
@@ -1024,8 +1026,9 @@ async fn reported(
         }
         Report::Settled { usage } => {
             if tx.workspaces().settle(session).await? {
+                let now = tx.now();
                 tx.workspaces()
-                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .record_active(session.organization, session.workspace, now)
                     .await?;
             }
             record_usage(tx, session, usage.as_ref()).await?;
@@ -1270,7 +1273,7 @@ async fn close_tools(
     reason: ClosingReason,
 ) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
-    let now = Timestamp::now();
+    let now = tx.now();
     for tool in running {
         if tx
             .log()

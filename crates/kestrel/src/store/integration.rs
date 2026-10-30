@@ -1,3 +1,4 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result, ensure};
 use jiff::{SignedDuration, Timestamp};
 use sqlx::sqlite::SqliteRow;
@@ -64,14 +65,20 @@ macro_rules! integrations_where {
 
 pub struct Integrations<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     keyring: &'a Keyring,
 }
 
 impl<'a> Integrations<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, keyring: &'a Keyring) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        keyring: &'a Keyring,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             keyring,
+            clock,
         }
     }
 
@@ -109,7 +116,7 @@ impl<'a> Integrations<'a> {
     ) -> Result<Integration> {
         let polled =
             matches!(&connection, Connection::Github(_)) && carries.contains(&Direction::Inbound);
-        let registered_at = Timestamp::now();
+        let registered_at = self.clock.now();
         let integration = Integration {
             id,
             organization: organization.id,
@@ -361,7 +368,7 @@ impl<'a> Integrations<'a> {
         .bind(maintained.poll_due_at.map(due))
         .bind(maintained.deliveries_read_from.map(|from| from.to_string()))
         .bind(maintained.last_polled_at.map(|at| at.to_string()))
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(read.id.to_string())
         .bind(read.revision)
         .execute(&mut *self.connection)
@@ -469,7 +476,7 @@ impl<'a> Integrations<'a> {
              WHERE id = ? AND revision = ?",
         )
         .bind(sealed)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(read.id.to_string())
         .bind(read.revision)
         .execute(&mut *self.connection)
@@ -671,7 +678,7 @@ impl<'a> Integrations<'a> {
              WHERE id = ? AND state <> 'retired'",
         )
         .bind(&replacement.sealed)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(integration.id.to_string())
         .execute(&mut *self.connection)
         .await
@@ -716,7 +723,7 @@ impl<'a> Integrations<'a> {
             .bind(&occurrence.id)
             .bind(i64::try_from(data.len())?)
             .bind(&reason)
-            .bind(Timestamp::now().to_string())
+            .bind(self.clock.now().to_string())
             .bind(integration.id.to_string())
             .execute(&mut *self.connection)
             .await
@@ -731,6 +738,7 @@ impl<'a> Integrations<'a> {
             Some(integration.id),
             occurrence,
             &data,
+            self.clock.now(),
         )
         .await
     }
@@ -742,7 +750,15 @@ impl<'a> Integrations<'a> {
         occurrence: &Occurrence,
     ) -> Result<Recorded> {
         let data = serde_json::to_string(&occurrence.data)?;
-        insert_event(self.connection, organization.id, None, occurrence, &data).await
+        insert_event(
+            self.connection,
+            organization.id,
+            None,
+            occurrence,
+            &data,
+            self.clock.now(),
+        )
+        .await
     }
 
     pub async fn acknowledge_event_refusal(&mut self, integration: &Integration) -> Result<()> {
@@ -818,7 +834,7 @@ impl<'a> Integrations<'a> {
         )
         .bind(source)
         .bind(reason)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(integration.id.to_string())
         .execute(&mut *self.connection)
         .await
@@ -966,7 +982,7 @@ impl<'a> Integrations<'a> {
         .bind(event.record_id.to_string())
         .bind(event.organization.to_string())
         .bind(workspace.id.to_string())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording the follow-up event {}", event.record_id))?;
@@ -1010,8 +1026,8 @@ impl<'a> Integrations<'a> {
         .bind(subject)
         .bind(body)
         .bind(turn_messages.map(serde_json::to_string).transpose()?)
-        .bind(due(Timestamp::now()))
-        .bind(Timestamp::now().to_string())
+        .bind(due(self.clock.now()))
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording what to say back about the session {}", session.id))?;
@@ -1073,7 +1089,7 @@ impl<'a> Integrations<'a> {
                  canceled_because = NULL
              WHERE session_id = ? AND turn = ?",
         )
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(to)
         .bind(post.session.to_string())
         .bind(post.turn.unwrap_or(0))
@@ -1127,6 +1143,7 @@ async fn insert_event(
     integration: Option<IntegrationId>,
     occurrence: &Occurrence,
     data: &str,
+    now: Timestamp,
 ) -> Result<Recorded> {
     let recorded = sqlx::query(
         "INSERT INTO event
@@ -1145,7 +1162,7 @@ async fn insert_event(
     .bind(occurrence.subject.as_deref())
     .bind(occurrence.time.to_string())
     .bind(data)
-    .bind(Timestamp::now().to_string())
+    .bind(now.to_string())
     .execute(connection)
     .await
     .with_context(|| {

@@ -4,7 +4,6 @@
 //! the pull request a comment points at is there because the Agent named it.
 
 use anyhow::Result;
-use jiff::Timestamp;
 use tracing::warn;
 
 use crate::domain::{
@@ -137,7 +136,7 @@ pub async fn post(store: &Store, github: &Github, post: &Post) -> Result<Option<
         return Ok(None);
     }
     tx.integrations()
-        .attempting_post(post, Timestamp::now())
+        .attempting_post(post, store.clock().now())
         .await?;
     tx.commit().await?;
 
@@ -178,7 +177,10 @@ async fn deferred(
         return Ok(None);
     }
     tx.integrations()
-        .post_deferred(post, back_off(integration.github()?.interval, refused))
+        .post_deferred(
+            post,
+            back_off(integration.github()?.interval, refused, store.clock().now()),
+        )
         .await?;
     tx.commit().await?;
 
@@ -210,7 +212,6 @@ fn body(workspace: &Workspace, session: &Session, exit: &Exit, said: Option<&str
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
 
     use super::*;
     use crate::domain::{
@@ -247,8 +248,8 @@ mod tests {
             integrations: Vec::new(),
             correlation: None,
             state: WorkspaceState::Open,
-            opened_at: Timestamp::now(),
-            last_active_at: Timestamp::now(),
+            opened_at: crate::timer::Clock::System.now(),
+            last_active_at: crate::timer::Clock::System.now(),
             sealed_at: None,
             continues: None,
             started_by: None,
@@ -287,7 +288,7 @@ mod tests {
             changing_options: Vec::new(),
             commands: Vec::new(),
             interrupting: None,
-            enqueued_at: Timestamp::now(),
+            enqueued_at: crate::timer::Clock::System.now(),
             started_at: None,
             ended_at: None,
             lease_expires_at: None,

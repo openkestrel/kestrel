@@ -14,6 +14,7 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::domain::WorkspaceId;
+use crate::timer::Clock;
 
 pub const LEASE: Duration = Duration::from_secs(60);
 
@@ -54,6 +55,7 @@ pub struct Followers {
 
 struct Hub {
     lease: Duration,
+    clock: Clock,
     workspaces: Mutex<HashMap<WorkspaceId, Watching>>,
     sweeping: AtomicBool,
 }
@@ -70,10 +72,11 @@ struct Follower {
 }
 
 impl Followers {
-    pub fn new(lease: Duration) -> Self {
+    pub fn new(lease: Duration, clock: Clock) -> Self {
         Self {
             hub: Arc::new(Hub {
                 lease,
+                clock,
                 workspaces: Mutex::new(HashMap::new()),
                 sweeping: AtomicBool::new(false),
             }),
@@ -81,7 +84,7 @@ impl Followers {
     }
 
     pub fn join(&self, workspace: WorkspaceId, name: Option<String>) -> Joined {
-        let now = Instant::now();
+        let now = self.hub.clock.instant();
         let (id, presence, expiration, start) = {
             let mut workspaces = self.hub.workspaces.lock().unwrap();
             let watching = workspaces.entry(workspace).or_insert_with(|| Watching {
@@ -127,7 +130,7 @@ impl Followers {
     }
 
     pub fn renew(&self, workspace: WorkspaceId, id: FollowerId) -> bool {
-        let now = Instant::now();
+        let now = self.hub.clock.instant();
         let mut workspaces = self.hub.workspaces.lock().unwrap();
         let Some(watching) = workspaces.get_mut(&workspace) else {
             return false;
@@ -205,9 +208,9 @@ async fn sweep(followers: Followers) {
             continue;
         };
 
-        tokio::time::sleep_until(deadline).await;
+        tokio::time::sleep(deadline.saturating_duration_since(followers.hub.clock.instant())).await;
 
-        let now = Instant::now();
+        let now = followers.hub.clock.instant();
         let mut workspaces = followers.hub.workspaces.lock().unwrap();
         for watching in workspaces.values_mut() {
             let expired: Vec<FollowerId> = watching

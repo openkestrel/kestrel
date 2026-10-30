@@ -62,7 +62,7 @@ pub async fn rotate_webhook_secret(
     let mut tx = store.begin().await?;
     let started = tx
         .integrations()
-        .start_rotation(&read, Secret::mint().as_str(), Timestamp::now())
+        .start_rotation(&read, Secret::mint().as_str(), store.clock().now())
         .await?;
     let current = tx.integrations().with_id(read.id).await?;
     tx.commit().await?;
@@ -114,7 +114,7 @@ async fn attempt(
     };
     let attempting = tx
         .integrations()
-        .attempting_rotation(read, &replacement, Timestamp::now())
+        .attempting_rotation(read, &replacement, store.clock().now())
         .await?;
     tx.commit().await?;
     if !attempting {
@@ -152,7 +152,13 @@ async fn ended(
         bail!(out_of_use(&current, organization, operation));
     }
     if let Some(rotation) = &current.rotation {
-        bail!(unrotated(&current, organization, operation, rotation));
+        bail!(unrotated(
+            &current,
+            organization,
+            operation,
+            rotation,
+            store.clock().now(),
+        ));
     }
     Ok(current)
 }
@@ -209,6 +215,7 @@ pub fn unrotated(
     organization: &str,
     operation: &'static str,
     rotation: &Rotation,
+    now: Timestamp,
 ) -> Reason {
     const BOTH: &str = "the previous and the replacement secret both verify until it finishes";
     let inspect = || Next::inspect(Resource::Integration, integration.name.clone());
@@ -273,7 +280,7 @@ pub fn unrotated(
             ),
         ),
         (Some(RotationFailure::RateLimited { until }), _) => unavailable(
-            Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+            Some(until.duration_since(now).as_secs().max(0)),
             format!(
                 "github is rate limiting until {until}, so integration {name}'s webhook secret \
                  was not changed; resume the rotation then; {BOTH}"

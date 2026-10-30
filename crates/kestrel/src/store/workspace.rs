@@ -1,3 +1,4 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
@@ -150,19 +151,25 @@ pub struct Opening<'a> {
 
 pub struct Workspaces<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
     touched: &'a mut Touched,
 }
 
 impl<'a> Workspaces<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+    pub(crate) fn over(
+        connection: &'a mut SqliteConnection,
+        touched: &'a mut Touched,
+        clock: &'a Clock,
+    ) -> Self {
         Self {
             connection,
             touched,
+            clock,
         }
     }
 
     pub async fn open(&mut self, opening: Opening<'_>) -> Result<Workspace> {
-        let opened_at = Timestamp::now();
+        let opened_at = self.clock.now();
         let id = WorkspaceId::generate();
         let workspace = loop {
             let workspace = Workspace {
@@ -301,7 +308,7 @@ impl<'a> Workspaces<'a> {
     }
 
     pub async fn seal(&mut self, workspace: &Workspace) -> Result<Timestamp> {
-        let sealed_at = Timestamp::now();
+        let sealed_at = self.clock.now();
 
         sqlx::query("UPDATE workspace SET state = ?, sealed_at = ? WHERE id = ?")
             .bind(WorkspaceState::Sealed.as_str())
@@ -700,7 +707,7 @@ impl<'a> Workspaces<'a> {
                 changing_options: Vec::new(),
                 commands: Vec::new(),
                 interrupting: None,
-                enqueued_at: Timestamp::now(),
+                enqueued_at: self.clock.now(),
                 started_at: None,
                 ended_at: None,
                 lease_expires_at: None,
@@ -766,7 +773,7 @@ impl<'a> Workspaces<'a> {
         .bind(workspace.organization.id.to_string())
         .bind(participant)
         .bind(body)
-        .bind(due(Timestamp::now()))
+        .bind(due(self.clock.now()))
         .bind(workspace.id.to_string())
         .fetch_one(&mut *self.connection)
         .await
@@ -952,7 +959,7 @@ impl<'a> Workspaces<'a> {
              RETURNING seq, participant, body, received_at, edited_at",
         )
         .bind(body)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(workspace.id.to_string())
         .bind(id)
         .fetch_one(&mut *self.connection)
@@ -1044,7 +1051,7 @@ impl<'a> Workspaces<'a> {
         .bind(&pending.declared.thought_level)
         .bind(&pending.trigger)
         .bind(&pending.brief)
-        .bind(due(Timestamp::now()))
+        .bind(due(self.clock.now()))
         .bind(workspace.id.to_string())
         .execute(&mut *self.connection)
         .await
@@ -1167,7 +1174,7 @@ impl<'a> Workspaces<'a> {
                  WHERE id = ? AND state = ?",
         )
         .bind(SessionState::Unreachable.as_str())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(session.id.to_string())
         .bind(SessionState::Queued.as_str())
         .execute(&mut *self.connection)
@@ -1230,7 +1237,7 @@ impl<'a> Workspaces<'a> {
             false => SessionState::Working.as_str(),
         })
         .bind(unbriefed.then_some(Preparing::Provisioning.as_str()))
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(due(lease_until))
         .bind(session.id.to_string())
         .bind(SessionState::Queued.as_str())
@@ -1647,7 +1654,7 @@ impl<'a> Workspaces<'a> {
         .bind(instance)
         .bind(workspace.organization.id.to_string())
         .bind(workspace.id.to_string())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("queueing the instance {instance} to be archived"))?;
@@ -1760,7 +1767,7 @@ impl<'a> Workspaces<'a> {
         .bind(instance)
         .bind(workspace.organization.id.to_string())
         .bind(digest)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording a supervisor started on the instance {instance}"))?;
@@ -1900,7 +1907,7 @@ impl<'a> Workspaces<'a> {
 
     pub async fn record_reached(&mut self, instance: &str) -> Result<()> {
         sqlx::query("UPDATE supervisor SET reached_at = ? WHERE instance = ?")
-            .bind(Timestamp::now().to_string())
+            .bind(self.clock.now().to_string())
             .bind(instance)
             .execute(&mut *self.connection)
             .await
@@ -1912,7 +1919,7 @@ impl<'a> Workspaces<'a> {
     /// Recorded on the Sessions it is carrying too, since a Session reads which supervisor it ran
     /// through and at what version.
     pub async fn record_connected(&mut self, instance: &str, version: &str) -> Result<()> {
-        let now = Timestamp::now().to_string();
+        let now = self.clock.now().to_string();
         let sessions = self.live_sessions_on(instance).await?;
         sqlx::query("UPDATE supervisor SET reached_at = ?, version = ? WHERE instance = ?")
             .bind(&now)
@@ -2103,7 +2110,7 @@ impl<'a> Workspaces<'a> {
     pub async fn record_started(&mut self, session: &Session) -> Result<bool> {
         let started =
             sqlx::query("UPDATE session SET started_at = ? WHERE id = ? AND started_at IS NULL")
-                .bind(Timestamp::now().to_string())
+                .bind(self.clock.now().to_string())
                 .bind(session.id.to_string())
                 .execute(&mut *self.connection)
                 .await
@@ -2158,7 +2165,7 @@ impl<'a> Workspaces<'a> {
              WHERE id = ? AND state != ?",
         )
         .bind(SessionState::Ended.as_str())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(exit.status())
         .bind(exit.because())
         .bind(message)
@@ -2173,7 +2180,7 @@ impl<'a> Workspaces<'a> {
         }
         self.touched.session(session);
         self.touched.queue(session.organization);
-        self.record_active(session.organization, session.workspace, Timestamp::now())
+        self.record_active(session.organization, session.workspace, self.clock.now())
             .await?;
 
         Ok(true)
@@ -2217,7 +2224,7 @@ impl<'a> Workspaces<'a> {
              RETURNING seq",
         )
         .bind(serde_json::to_string(&instruction)?)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(session.id.to_string())
         .fetch_optional(&mut *self.connection)
         .await
@@ -2301,7 +2308,7 @@ impl<'a> Workspaces<'a> {
         .bind(session.id.to_string())
         .bind(session.organization.to_string())
         .bind(session.id.to_string())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(session.id.to_string())
         .fetch_one(&mut *self.connection)
         .await
@@ -2337,7 +2344,7 @@ impl<'a> Workspaces<'a> {
                AND EXISTS (SELECT 1 FROM session WHERE id = ? AND state = ?)
              RETURNING seq, from_seq",
         )
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(session.id.to_string())
         .bind(session.id.to_string())
         .bind(SessionState::Working.as_str())
@@ -2411,7 +2418,7 @@ impl<'a> Workspaces<'a> {
              WHERE id = ? AND state = ? AND interrupting_participant IS NULL",
         )
         .bind(participant)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(session.id.to_string())
         .bind(SessionState::Working.as_str())
         .execute(&mut *self.connection)
