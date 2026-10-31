@@ -43,6 +43,7 @@ mod ports;
 mod presence;
 mod presentation;
 mod profile;
+mod profile_cli;
 mod pull_request;
 mod reach;
 mod readiness;
