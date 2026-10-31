@@ -1,9 +1,13 @@
+//! These ask what the control plane raised as well as what it served, on a stepped fixture: a live
+//! work role on the wall clock is what made them flake, and the coalescing window before a notice
+//! is delivered is not something a test can wait out.
+
 use crate::support;
 
 use std::fs;
 use std::time::Duration;
 
-use kestrel::domain::{Session, SessionId, Workspace};
+use kestrel::domain::{Session, SessionId, Usage, Workspace};
 use kestrel::live_work::{Changes, Commits, Git, Repository, RunningTool, RunningUnit, UnitKind};
 use kestrel::log::ToolStatus;
 use kestrel::operator;
@@ -14,13 +18,10 @@ use support::Kestrel;
 use support::OnTheLink;
 use support::fixture::Fixture;
 use support::link_client::Link;
-use support::scripted_agent::{self, Script};
-use support::supervisor;
 
-/// Longer than the hub's 250 ms coalescing window, so a quiet gap is really quiet.
+/// Longer than the hub's 250 ms coalescing window, so a batch is collected whole.
 const QUIET: Duration = Duration::from_millis(600);
 const PATIENCE: Duration = Duration::from_secs(30);
-const SETTLE: Duration = Duration::from_secs(2);
 
 struct Stream {
     response: reqwest::Response,
@@ -120,22 +121,8 @@ impl Stream {
     }
 }
 
-async fn notices_until_quiet(stream: &mut Stream) -> Vec<Frame> {
-    let mut frames = Vec::new();
-    while let Some(frame) = stream.next(QUIET).await {
-        frames.push(frame);
-    }
-
-    frames
-}
-
-/// Discards what setup raised; on a loaded runner a setup notice can trail its write by more than `QUIET`.
-async fn drain(stream: &mut Stream) {
-    let deadline = tokio::time::Instant::now() + SETTLE;
-    while stream.next(QUIET).await.is_some() || tokio::time::Instant::now() < deadline {}
-}
-
-/// Collects notices until `expected` holds and the stream goes quiet, or `PATIENCE` runs out.
+/// Collects notices until `expected` holds and the stream goes quiet, which gathers a batch without
+/// proving it complete: `batch` is what a test that must have all of it waits on.
 async fn notices_until(stream: &mut Stream, expected: impl Fn(&[Frame]) -> bool) -> Vec<Frame> {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let mut frames = Vec::new();
@@ -145,6 +132,31 @@ async fn notices_until(stream: &mut Stream, expected: impl Fn(&[Frame]) -> bool)
             None if expected(&frames) || tokio::time::Instant::now() >= deadline => return frames,
             None => {}
         }
+    }
+}
+
+/// Every notice the hub has already handed the stream, which is the whole batch because nothing is
+/// left undelivered.
+async fn batch(kestrel: &Kestrel, stream: &mut Stream) -> Vec<Frame> {
+    kestrel.notices_settled().await;
+
+    let mut frames = Vec::new();
+    while let Some(frame) = stream.next(QUIET).await {
+        frames.push(frame);
+    }
+
+    frames
+}
+
+/// Follows a report the control plane records after the link has accepted it.
+async fn eventually(what: &str, done: impl AsyncFn() -> bool) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !done().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -223,13 +235,32 @@ fn a_session_state(
     }
 }
 
+fn reported_usage(context_used: u64) -> Report {
+    Report::SessionState {
+        tools: vec![],
+        units: vec![],
+        message_buffering: false,
+        thought_buffering: false,
+        usage: Some(Usage {
+            context_used,
+            context_size: 1_000,
+            cost: None,
+        }),
+        last_activity_at: None,
+    }
+}
+
 fn a_reported_checkout() -> Repository {
+    a_reported_checkout_of(2)
+}
+
+fn a_reported_checkout_of(files: u64) -> Repository {
     Repository {
         repository: "https://github.com/jtmthf/kestrel".to_owned(),
         git: Git::Read {
             branch: Some("main".to_owned()),
             changed: Changes {
-                files: 2,
+                files,
                 added: 7,
                 removed: 1,
             },
@@ -295,16 +326,16 @@ async fn work_read(kestrel: &Kestrel, workspace: &Workspace) -> Value {
 
 #[tokio::test]
 async fn a_subscriber_gets_open_on_connect_and_again_on_reconnect() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
 
     let mut first = Stream::open(&kestrel, "acme").await;
-    let open = first.next(QUIET).await.expect("an open event");
+    let open = first.next(PATIENCE).await.expect("an open event");
     assert_eq!(open.name, "open");
     drop(first);
 
     let mut again = Stream::open_with(&kestrel, "acme", Some("7")).await;
-    let open = again.next(QUIET).await.expect("an open event");
+    let open = again.next(PATIENCE).await.expect("an open event");
     assert_eq!(open.name, "open");
 
     kestrel.teardown().await;
@@ -312,11 +343,11 @@ async fn a_subscriber_gets_open_on_connect_and_again_on_reconnect() {
 
 #[tokio::test]
 async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_their_notices() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
+        changes.next(PATIENCE).await.expect("an open event").name,
         "open"
     );
 
@@ -382,11 +413,11 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
 
 #[tokio::test]
 async fn a_notice_never_arrives_before_a_get_shows_its_change() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
+        changes.next(PATIENCE).await.expect("an open event").name,
         "open"
     );
 
@@ -433,18 +464,14 @@ async fn a_notice_never_arrives_before_a_get_shows_its_change() {
 
 #[tokio::test]
 async fn a_refused_post_raises_nothing() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     kestrel.seal_workspace(workspace.id).await;
-    // The open and the seal raised notices of their own; letting the coalescing window pass
-    // leaves only the refusal under test.
-    tokio::time::sleep(Duration::from_millis(400)).await;
-
-    let mut changes = Stream::open(&kestrel, "acme").await;
-    assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
-        "open"
+    let raised = kestrel.notices_raised();
+    assert!(
+        raised > 0,
+        "opening and sealing a workspace raised no notice at all"
     );
 
     let path = operator::WORKSPACE_MESSAGES
@@ -458,11 +485,10 @@ async fn a_refused_post_raises_nothing() {
         .expect("the operator boundary should answer");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    let refused = notices_until_quiet(&mut changes).await;
-    assert!(
-        refused.is_empty(),
-        "a refused post raised notices: {refused:?}",
-        refused = names(&refused)
+    assert_eq!(
+        kestrel.notices_raised() - raised,
+        0,
+        "a refused post raised a notice"
     );
 
     kestrel.teardown().await;
@@ -470,7 +496,7 @@ async fn a_refused_post_raises_nothing() {
 
 #[tokio::test]
 async fn other_organizations_receive_only_anonymous_queue_changes() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     Fixture::acme()
         .organization("other")
@@ -478,15 +504,17 @@ async fn other_organizations_receive_only_anonymous_queue_changes() {
         .await;
 
     let mut other = Stream::open(&kestrel, "other").await;
-    assert_eq!(other.next(QUIET).await.expect("an open event").name, "open");
+    assert_eq!(
+        other.next(PATIENCE).await.expect("an open event").name,
+        "open"
+    );
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     post(&kestrel, workspace.id, "begin").await;
-    let theirs = notices_until(&mut other, |theirs| names_changed(theirs, "queue", None)).await;
-    assert!(
-        theirs.len() == 1 && names_changed(&theirs, "queue", None),
-        "only a queue invalidation may reach the other Organization: {theirs:?}",
-        theirs = names(&theirs)
+    assert_eq!(
+        names(&batch(&kestrel, &mut other).await),
+        ["change({\"resource\":\"queue\"})"],
+        "only a queue invalidation may reach the other Organization"
     );
 
     let ours = kestrel.open_workspace("other", "kestrel", "builder").await;
@@ -505,7 +533,7 @@ async fn other_organizations_receive_only_anonymous_queue_changes() {
 
 #[tokio::test]
 async fn held_input_changes_invalidate_foreign_queue_positions() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     Fixture::acme()
         .organization("other")
@@ -514,24 +542,31 @@ async fn held_input_changes_invalidate_foreign_queue_positions() {
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.waits_after_its_first_turn(&session).await;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Opened once what the setup raised has been delivered, so only the held input reaches it.
+    kestrel.notices_settled().await;
     let mut other = Stream::open(&kestrel, "other").await;
-    assert_eq!(other.next(QUIET).await.expect("an open event").name, "open");
+    assert_eq!(
+        other.next(PATIENCE).await.expect("an open event").name,
+        "open"
+    );
+
     kestrel
         .post_while_busy(workspace.id, "alice", "next Turn")
         .await;
-    let held = notices_until(&mut other, |held| names_changed(held, "queue", None)).await;
-    assert_eq!(names(&held), ["change({\"resource\":\"queue\"})"]);
+    assert_eq!(
+        names(&batch(&kestrel, &mut other).await),
+        ["change({\"resource\":\"queue\"})"]
+    );
     let message = kestrel.held_messages(workspace.id).await.remove(0);
     kestrel
         .withdraw_message(workspace.id, message.id, "alice")
         .await
         .unwrap();
-    let withdrawn = notices_until(&mut other, |withdrawn| {
-        names_changed(withdrawn, "queue", None)
-    })
-    .await;
-    assert_eq!(names(&withdrawn), ["change({\"resource\":\"queue\"})"]);
+    assert_eq!(
+        names(&batch(&kestrel, &mut other).await),
+        ["change({\"resource\":\"queue\"})"]
+    );
     kestrel.teardown().await;
 }
 
@@ -606,44 +641,27 @@ fn resolve<'a>(document: &'a Value, reference: &str) -> &'a Value {
 
 #[tokio::test]
 async fn live_usage_raises_no_change_notice() {
-    let kestrel = Kestrel::dispatching_to(
-        supervisor::binary(),
-        &scripted_agent::playing(Script::BurstsUsage),
-    )
-    .await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let _instructions = link.open(&on.instance, &on.credential, None).await;
 
-    let mut changes = Stream::open(&kestrel, "acme").await;
-    assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
-        "open"
-    );
-
-    let session = kestrel.enqueue_session(workspace.id).await;
-    let started = notices_until(&mut changes, |started| {
-        names_changed(started, "session", Some(&session.id.to_string()))
-    })
-    .await;
-    assert!(
-        names_changed(&started, "session", Some(&session.id.to_string())),
-        "the started session raised no session notice: {started:?}",
-        started = names(&started)
-    );
-
-    // The burst and its trailing-edge report land after the start's notices settled; neither
-    // writes a row, so nothing more may arrive.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-    let mut late = Vec::new();
-    while tokio::time::Instant::now() < deadline {
-        if let Some(frame) = changes.next(QUIET).await {
-            late.push(frame);
-        }
+    let raised = kestrel.notices_raised();
+    for context_used in [250, 500, 750, 1_000] {
+        reported(&link, &on, Some(session.id), reported_usage(context_used)).await;
     }
-    assert!(
-        late.is_empty(),
-        "live usage raised a notice: {late:?}",
-        late = names(&late)
+
+    assert_eq!(
+        kestrel.notices_raised() - raised,
+        0,
+        "live usage raised a notice"
+    );
+    assert_eq!(
+        session_read(&kestrel, &session).await["usage"]["context_used"],
+        1_000,
+        "the notice-free usage never reached the read"
     );
 
     kestrel.teardown().await;
@@ -651,19 +669,20 @@ async fn live_usage_raises_no_change_notice() {
 
 #[tokio::test]
 async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_none_on_progress() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());
     let _instructions = link.open(&on.instance, &on.credential, None).await;
 
+    // Opened once what the setup raised has been delivered, so only the reports below reach it.
+    kestrel.notices_settled().await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
+        changes.next(PATIENCE).await.expect("an open event").name,
         "open"
     );
-    drain(&mut changes).await;
 
     let id = session.id.to_string();
     reported(
@@ -688,6 +707,7 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
         "the notice came before the session read showed the running call"
     );
 
+    let raised = kestrel.notices_raised();
     reported(
         &link,
         &on,
@@ -695,11 +715,10 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
         a_session_state(vec![a_running_tool("read b")], vec![], false),
     )
     .await;
-    let progressed = notices_until_quiet(&mut changes).await;
-    assert!(
-        progressed.is_empty(),
-        "a call's progress update raised a notice: {progressed:?}",
-        progressed = names(&progressed)
+    assert_eq!(
+        kestrel.notices_raised() - raised,
+        0,
+        "a call's progress update raised a notice"
     );
 
     reported(
@@ -729,19 +748,20 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
 
 #[tokio::test]
 async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settles() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());
     let _instructions = link.open(&on.instance, &on.credential, None).await;
 
+    // Opened once what the setup raised has been delivered, so only the reports below reach it.
+    kestrel.notices_settled().await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
+        changes.next(PATIENCE).await.expect("an open event").name,
         "open"
     );
-    drain(&mut changes).await;
 
     let id = session.id.to_string();
     reported(
@@ -766,6 +786,7 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
         "the notice came before the session read showed the open unit"
     );
 
+    let raised = kestrel.notices_raised();
     // A snapshot change that is not a unit opening or settling raises nothing.
     reported(
         &link,
@@ -774,11 +795,10 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
         a_session_state(vec![], vec![a_running_unit()], true),
     )
     .await;
-    let quiet = notices_until_quiet(&mut changes).await;
-    assert!(
-        quiet.is_empty(),
-        "an unrelated snapshot change raised a notice: {quiet:?}",
-        quiet = names(&quiet)
+    assert_eq!(
+        kestrel.notices_raised() - raised,
+        0,
+        "an unrelated snapshot change raised a notice"
     );
 
     reported(
@@ -803,7 +823,7 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
 
 #[tokio::test]
 async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_notice() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (_session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
@@ -820,12 +840,13 @@ async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_noti
     )
     .await;
 
+    // Opened once what the setup raised has been delivered, so only the reports below reach it.
+    kestrel.notices_settled().await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
-        changes.next(QUIET).await.expect("an open event").name,
+        changes.next(PATIENCE).await.expect("an open event").name,
         "open"
     );
-    drain(&mut changes).await;
 
     reported(
         &link,
@@ -852,6 +873,10 @@ async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_noti
     );
     assert_eq!(read["repositories"][0]["changed"]["files"], 2, "{read}");
 
+    // A second report of the same checkout is told apart only by when it was reported.
+    kestrel.advance(Duration::from_secs(1)).await;
+    let recorded_at = kestrel.now().to_string();
+    let raised = kestrel.notices_raised();
     reported(
         &link,
         &on,
@@ -861,12 +886,38 @@ async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_noti
         },
     )
     .await;
-    let unchanged = notices_until_quiet(&mut changes).await;
+    // The link accepts a work report before the control plane records it, so the read naming this
+    // one is what says it is done with it.
+    eventually("the same checkout's report being recorded", async || {
+        work_read(&kestrel, &workspace).await["last_report"]["reported_at"] == recorded_at
+    })
+    .await;
+
+    reported(
+        &link,
+        &on,
+        None,
+        Report::Work {
+            repositories: vec![a_reported_checkout_of(3)],
+        },
+    )
+    .await;
+    let changed = notices_until(&mut changes, |changed| {
+        names_changed(changed, "workspace", Some(&workspace.id.to_string()))
+    })
+    .await;
     assert!(
-        unchanged.is_empty(),
-        "an unchanged work summary raised a notice: {unchanged:?}",
-        unchanged = names(&unchanged)
+        names_changed(&changed, "workspace", Some(&workspace.id.to_string())),
+        "the changed work summary raised no workspace notice after it: {changed:?}",
+        changed = names(&changed)
     );
+    assert_eq!(
+        kestrel.notices_raised() - raised,
+        1,
+        "an unchanged work summary raised a notice"
+    );
+    let read = work_read(&kestrel, &workspace).await;
+    assert_eq!(read["repositories"][0]["changed"]["files"], 3, "{read}");
 
     kestrel.teardown().await;
 }

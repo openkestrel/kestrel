@@ -971,6 +971,25 @@ impl Kestrel {
         self.store.clock().now()
     }
 
+    /// A raise is counted as its write commits, so a step that must raise none is answerable
+    /// without waiting out the coalescing window before delivery.
+    pub fn notices_raised(&self) -> usize {
+        self.store.notices().raised()
+    }
+
+    /// Waits until every raise has been handed to subscribers, so a stream opened next hears only
+    /// what the test writes after it.
+    pub async fn notices_settled(&self) {
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        while self.store.notices().undelivered() > 0 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "raised notices never reached their subscribers"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     pub async fn go_live(&self) {
         let mut work = self.work.lock().await;
         let WorkRole::Stepped(stepped) = std::mem::replace(&mut *work, WorkRole::GoingLive) else {

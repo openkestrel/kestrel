@@ -77,6 +77,10 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   has yet to get one, idle hints are a no-op in both drivers, and a sign-in test's only rival is a
   restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
   expires its own flow first. Stepping is opt-in until most of `suite` has moved.
+- **A test that must raise no notice asks the hub, it does not wait it out.** Delivery waits a
+  coalescing window the test cannot move, so `notices_raised`, sampled around the step, says
+  whether the write raised one, and `notices_settled` is what lets a stream opened next hear only
+  what follows (`suite/changes.rs`).
 - **A test moves time on the clock, never by backdating a row.** Everything in
   `crates/kestrel/src` reads the time from the `Clock` that `Store` carries, which is `Timer`'s
   (`suite/clock.rs` fails the build on any other reading). A stepped or serve-only control plane
