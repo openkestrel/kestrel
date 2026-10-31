@@ -29,13 +29,14 @@ use kestrel_operator_types as wire;
 use reqwest::Url;
 
 use crate::api::ControlPlane;
-use crate::command::status::{Status, UnresolvedStatus};
 use crate::command::{Command, Running};
 use crate::diagnostic::Invocation;
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
 use crate::scope::{Scope, Scoping, Source};
 use crate::usage::{exit_after, json_value};
+
+pub(crate) use crate::command::status::{Status, UnresolvedStatus};
 
 const BINARY: &str = "kestrel";
 const CONTROL_PLANE_VARIABLE: &str = "KESTREL_CONTROL_PLANE";

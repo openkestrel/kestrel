@@ -117,8 +117,7 @@ impl Command {
     }
 }
 
-/// What every command is handed; the control plane is kept as given, which is how guidance
-/// names it back.
+/// The control plane is kept as given beside its parsed URL, because guidance names it back as given.
 pub(crate) struct Running<'a> {
     pub(crate) api: &'a ControlPlane,
     pub(crate) presentation: &'a Presentation,
