@@ -23,12 +23,25 @@ is still yours to record.
      difficulty, with the same three facts and the suite it runs in.
 2. **Fix it now if it is cheap**, in its own pull request based on `main` that closes the issue. Cheap
    means the cause is visible from the failure output and the test's own code, and the fix stays in
-   that test: a fixed sleep or deadline replaced by waiting on the condition, a shared resource made
-   the test's own, an ordering it assumed loosened. A fix that touches product code, a `support/`
-   helper other tests use, or needs reproducing under stress first stays an issue.
+   that test. A `suite` test that races the live work role or the wall clock is fixed by moving it
+   to the stepped fixture ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)),
+   never by swapping a sleep for a wait on the condition: that silences this test and leaves it
+   written the way the next one copies. A shared resource made the test's own is also cheap. A fix
+   that touches product code, a `support/` helper other tests use, or needs reproducing under
+   stress first stays an issue.
 3. **Re-run the failed jobs** with `gh run rerun <run-id> --failed`.
 
 ## Closing a flake issue
+
+A flake issue closes only once it names its **cause class**, so the count of each shows whether the
+suite or the product is at fault:
+
+- **Test race:** the test raced the work role or the clock. Fixed by moving it to stepped.
+- **Product race:** the product loses a race it should not. Fixed in product code, with a stepped
+  test that interleaves the race on purpose; stepping the flaky test alone hides the bug. About half
+  of the flakes ADR-0059 diagnosed were this, so when the cause is unclear, rule this out first.
+- **Shared resource:** two tests, or two runs, share a port, a data dir or an Organization.
+- **Infra:** a step that is not a test, retried through `.github/scripts/retry.sh`.
 
 A fix pull request carries a stress run as evidence: the test failing under stress before the fix
 and passing after, on the runners the gate uses. Dispatch the Flakes workflow filtered to the test
