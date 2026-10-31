@@ -53,6 +53,12 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   Raw content has nothing to filter: a `204` has no answer to filter, and `--jq` on `workspace
   read`'s raw bytes is refused rather than inventing a record.
 - **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
+  Failure to disable echo refuses input. `profile set` reads and validates input before declaring
+  an absent Profile, defaults its ownership to the stable Operator, and uses an explicit
+  `--owner` only for creation. Existing ownership stays unchanged. Variable input drops one
+  trailing LF or CRLF; generic UTF-8 file input stays byte-for-byte. Creation and holding are
+  separate boundary writes, so a holding failure names the already-declared Profile while keeping
+  the original typed diagnostic and exit. Generic writes make no provider or model call.
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
   answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for

@@ -2,16 +2,44 @@
 
 A subscription profile gives a workspace access to one person's OpenCode, Codex, or Claude login. Kestrel stores credentials outside the image and checkout, supplies them only to sessions that name the profile, and records the profile's owner.
 
-## Declare and populate a profile
+## Generic input and checked imports
 
-For an OpenCode Go or Zen key, declare a profile and set the variable the harness reads:
+`profile set` accepts any variable or UTF-8 file the harness needs. It creates an absent
+Profile under the stable Operator identity; name the Operator first:
 
 ```sh
-kestrel profile declare jack --owner jack
+kestrel operator name Jack
 kestrel profile set jack --variable OPENCODE_API_KEY
 ```
 
-`profile set` reads the value from standard input; paste it and press Ctrl-D. It stores the value encrypted and does not print it again. `kestrel profile list` shows only the names of items held by each profile.
+An existing Profile keeps its ownership. `--owner NAME` selects a free-text owner only when
+creating a Profile, even when NAME matches the Operator's name. Such a Profile is never
+selected as the Operator's default. For example:
+
+```sh
+kestrel profile set other --owner Alex --variable OPENCODE_API_KEY
+```
+
+Choose exactly one of `--variable NAME` and `--file PATH`. Neither accepts a secret-valued
+argument. At a terminal, input is hidden; paste it and press Ctrl-D. A pipe is read to EOF.
+Variable input loses exactly one trailing LF or CRLF; all other whitespace stays. File input
+is preserved exactly, including its trailing newline, and must be nonempty UTF-8.
+
+Input is collected before creation. If creation succeeds but saving the material fails, the
+failure says the Profile was already declared; inspect it with `kestrel profile list`.
+Existing material survives rejected input. `--organization` and `--control-plane` select the
+scope and connection as on other commands. Successful output lists only material metadata.
+
+Generic writes store encrypted material, advance its revision and replace obsolete authentication
+and model-use evidence with unchecked evidence. They cancel an active relay for the same slot
+and make no provider or model call. Catalogued sign-in imports through
+`PUT /operator/organizations/{organization}/sign-ins/{harness}/{method}` instead choose the
+catalogue's destination, validate its input and perform supported provider checks without model
+usage. See [saved sign-ins](../architecture/operator-setup.md#saved-sign-ins) for checked imports
+and their saved-state diagnostics. `profile set` does not perform those checks.
+
+`kestrel profile declare NAME` can also declare a Profile without storing material; its omitted
+`--owner` selects the Operator. `kestrel profile list` shows ownership and the names of held items.
 
 Codex and Claude can use subscription logins instead of provider keys. Supply a login file or token according to the harness:
 

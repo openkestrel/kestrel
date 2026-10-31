@@ -592,3 +592,54 @@ async fn model_use_is_evidence_for_one_harness_model_and_revision_only() {
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn cli_generic_profile_set_replaces_catalogue_evidence_without_checking_or_model_usage() {
+    use crate::support::client::{self, Invocation};
+
+    let stub = ProviderStub::start();
+    let kestrel = booted(&stub).await;
+    let imported = save(&kestrel, "claude", "claude-setup-token", CLAUDE_TOKEN).await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.text);
+    let revision = imported.body["revision"].as_i64().expect("a revision");
+    kestrel
+        .database()
+        .record_authentication(revision, "authentication_failed")
+        .await;
+    kestrel
+        .database()
+        .record_model_use(revision, "claude", "claude-sonnet", "worked")
+        .await;
+    let before = saved(&kestrel).await;
+    let before = one(&before, "claude", "claude-setup-token");
+    assert_eq!(before["authentication"]["state"], "authentication_failed");
+    assert_eq!(before["model_use"].as_array().unwrap().len(), 1);
+
+    let replaced = client::ran_by(
+        &kestrel,
+        &[
+            "profile",
+            "set",
+            OPERATOR,
+            "--variable",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "--json",
+        ],
+        Invocation::default().given("generic-private-value\n"),
+    )
+    .await;
+    assert!(replaced.status.success(), "{}", replaced.err);
+    assert!(!replaced.out.join("\n").contains("generic-private-value"));
+    assert!(!replaced.err.contains("generic-private-value"));
+    let after = saved(&kestrel).await;
+    let after = one(&after, "claude", "claude-setup-token");
+    assert!(after["revision"].as_i64().unwrap() > revision);
+    assert_eq!(after["authentication"]["state"], "unchecked");
+    assert_eq!(after["authentication"]["source"], "generic_write");
+    assert_eq!(after["model_use"], json!([]));
+    assert!(
+        stub.asked().is_empty(),
+        "generic writes make no provider call"
+    );
+    kestrel.teardown().await;
+}

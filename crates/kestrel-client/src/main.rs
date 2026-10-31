@@ -248,14 +248,20 @@ enum ProfileCommand {
     Declare {
         /// The name a Workspace or Trigger names it by
         name: String,
-        /// The person it belongs to, which never changes
+        /// A free-text owner; omit to record stable Operator ownership
         #[arg(long)]
-        owner: String,
+        owner: Option<String>,
     },
-    /// Hold a login in a profile, read from standard input
+    /// Hold generic material from hidden terminal input or stdin; create an absent Profile
+    #[command(
+        after_help = "Choose --variable NAME or --file PATH. Variables lose one trailing newline; UTF-8 files are preserved exactly. Generic writes are unchecked and make no provider or model call; catalogued sign-in imports validate the method's material instead."
+    )]
     Set {
         /// The profile it is held in
         name: String,
+        /// A free-text owner for creation only; omit to record stable Operator ownership
+        #[arg(long)]
+        owner: Option<String>,
         #[command(flatten)]
         entry: ProfileEntry,
     },
@@ -1307,24 +1313,45 @@ async fn run(
             let profile: wire::SubscriptionProfile = api
                 .post_as(
                     &["organizations", &organization, "profiles"],
-                    &wire::SubscriptionProfileDeclaration {
-                        name,
-                        owner: Some(owner),
-                    },
+                    &wire::SubscriptionProfileDeclaration { name, owner },
                 )
                 .await?;
             typed::show(&presentation, &view::PROFILE_DECLARED, &profile)?;
         }
-        Command::Profile(ProfileCommand::Set { name, entry }) => {
+        Command::Profile(ProfileCommand::Set { name, owner, entry }) => {
             let organization = scoping.resolve().await?.organization;
+            let secret = read_the_login(entry.file.is_some())?;
+            let profiles: wire::ListSubscriptionProfilesResponse = api
+                .get_as(&["organizations", &organization, "profiles"])
+                .await?;
+            let absent = !profiles.iter().any(|profile| profile.name == name);
+            if absent {
+                let _: wire::SubscriptionProfile = api
+                    .post_as(
+                        &["organizations", &organization, "profiles"],
+                        &wire::SubscriptionProfileDeclaration {
+                            name: name.clone(),
+                            owner,
+                        },
+                    )
+                    .await?;
+            }
             let login: wire::SubscriptionProfileLogin = api
                 .put_as(
                     &entry.path(&organization, &name),
-                    &wire::ProviderCredentialSecret {
-                        secret: read_the_login(entry.file.is_some())?,
-                    },
+                    &wire::ProviderCredentialSecret { secret },
                 )
-                .await?;
+                .await
+                .map_err(|error| {
+                    if absent {
+                        diagnostic::after_save(
+                            error,
+                            &format!("The Profile {name} in Organization {organization} was already declared"),
+                        )
+                    } else {
+                        error
+                    }
+                })?;
             typed::show(&presentation, &view::LOGIN, &login)?;
         }
         Command::Profile(ProfileCommand::List) => {
@@ -3197,16 +3224,22 @@ fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) ->
 
 /// A file is held exactly as it was read, because it is written back exactly as it was held.
 fn read_the_login(file: bool) -> Result<String> {
-    let read = read_standard_input("a login")?;
+    let mut read = read_standard_input("a login")?;
+    if !file && read.ends_with('\n') {
+        read.pop();
+        if read.ends_with('\r') {
+            read.pop();
+        }
+    }
 
-    if read.trim().is_empty() {
+    if read.is_empty() {
         bail!(Failed::new(
             Exit::Usage,
             "a login is read from standard input, and nothing was on it"
         ));
     }
 
-    Ok(if file { read } else { read.trim().to_owned() })
+    Ok(read)
 }
 
 /// Off standard input rather than out of an argument, so a provider's key is never in a shell
@@ -3230,10 +3263,18 @@ fn read_the_secret() -> Result<String> {
 /// nothing driving the Client can block on a prompt it cannot see.
 fn read_standard_input(what: &str) -> Result<String> {
     let mut stdin = std::io::stdin();
-    let unechoed = stdin.is_terminal().then(|| {
+    let unechoed = if stdin.is_terminal() {
+        let guard = terminal::Unechoed::on(&stdin).ok_or_else(|| {
+            Failed::new(
+                Exit::Failure,
+                "cannot disable terminal echo; no secret was read",
+            )
+        })?;
         eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
-        terminal::Unechoed::on(&stdin)
-    });
+        Some(guard)
+    } else {
+        None
+    };
 
     let mut read = String::new();
     stdin.read_to_string(&mut read)?;

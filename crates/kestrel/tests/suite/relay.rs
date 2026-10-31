@@ -495,13 +495,20 @@ async fn generic_profile_imports_cancel_only_the_relay_whose_entry_they_replace(
     let (status, unchanged) = sent(reqwest::Client::new().get(address(&kestrel, &relay))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(unchanged, waiting);
-    let (status, imported) = sent(
-        reqwest::Client::new()
-            .put(format!("{profile}/CLAUDE_CODE_OAUTH_TOKEN"))
-            .json(&json!({"secret":"generic-subscription"})),
+    let imported = crate::support::client::ran_by(
+        &kestrel,
+        &[
+            "profile",
+            "set",
+            "ada",
+            "--variable",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "--json",
+        ],
+        crate::support::client::Invocation::default().given("generic-subscription\n"),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert!(imported.status.success(), "{}", imported.err);
     until(&kestrel, &relay, "cancelled").await;
     cleaned(&kestrel, &relay).await;
 }
