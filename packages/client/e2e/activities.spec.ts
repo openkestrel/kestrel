@@ -350,13 +350,13 @@ test("a running call is a row with nothing to open, and its completed call repla
 	await expect(rows).toContainText("running");
 	await expect(rows.getByRole("button")).toHaveCount(0);
 	expect(scripted.ranges).toEqual([]);
-	const running = await rows.elementHandle();
 	const activity = log.getByRole("button", { name: "Activity, Working", exact: true });
 	await activity.click();
 	await expect(activity).toHaveAttribute("aria-expanded", "false");
 	await expect(activity.getByRole("img", { name: "execute tools", exact: true })).toBeVisible();
 	expect(scripted.ranges).toEqual([]);
 	await activity.click();
+	const running = await rows.elementHandle();
 
 	held.resolve();
 
