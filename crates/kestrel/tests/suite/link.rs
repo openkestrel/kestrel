@@ -1500,7 +1500,7 @@ async fn a_cli_cut_after_the_final_activity_id_does_not_print_its_replacement_tw
             let request = requests.fetch_add(1, Ordering::SeqCst);
             async move {
                 let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"units\":[],\"message_buffering\":false,\"thought_buffering\":false,\"observation\":{\"availability\":\"unavailable\",\"last\":null}}\n\n";
-                let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
+                let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"tool_kinds\":[],\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
                 let tail = if request == 0 { "" } else {
                     assert_eq!(headers["last-event-id"], "example:4");
                     "id: example:5\nevent: entry\ndata: {\"seq\":5,\"kind\":\"shared_state\",\"appended_at\":\"2026-09-29T12:00:00Z\",\"entry\":{\"type\":\"said\",\"participant\":\"builder\",\"message\":\"done\"}}\n\nevent: end\ndata: {\"because\":\"sealed\"}\n\n"
