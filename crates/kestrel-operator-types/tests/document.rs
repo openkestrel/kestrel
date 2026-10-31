@@ -23,3 +23,10 @@ fn a_schema_name_two_files_define_is_refused() {
 
     assert!(error.to_string().contains("Thing"), "{error}");
 }
+
+#[test]
+fn a_file_beside_the_root_that_no_reference_reaches_is_refused() {
+    let error = bundle(&fixture("unreached/operator.json")).unwrap_err();
+
+    assert!(error.to_string().contains("stray.json"), "{error}");
+}

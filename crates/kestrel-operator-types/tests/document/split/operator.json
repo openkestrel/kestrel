@@ -2,11 +2,11 @@
   "openapi": "3.1.0",
   "info": { "title": "fixture", "version": "0" },
   "paths": {
-    "/things/{thing}": { "$ref": "paths/things.json#/things-thing" },
+    "/things/{thing}": { "$ref": "operator/paths/things.json#/things-thing" },
     "/inline": {
       "get": {
         "responses": {
-          "200": { "content": { "application/json": { "schema": { "$ref": "schemas/things.json#/Part" } } } }
+          "200": { "content": { "application/json": { "schema": { "$ref": "operator/schemas/things.json#/Part" } } } }
         }
       }
     }
@@ -15,11 +15,11 @@
     "responses": {
       "Refused": {
         "description": "Refused.",
-        "content": { "application/json": { "schema": { "$ref": "schemas/refusals.json#/Refusal" } } }
+        "content": { "application/json": { "schema": { "$ref": "operator/schemas/refusals.json#/Refusal" } } }
       }
     },
     "schemas": {
-      "Inline": { "type": "array", "items": { "$ref": "schemas/things.json#/Thing" } }
+      "Inline": { "type": "array", "items": { "$ref": "operator/schemas/things.json#/Thing" } }
     }
   }
 }

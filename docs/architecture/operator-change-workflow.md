@@ -18,7 +18,8 @@ is written in: `#/Session` within a schema file, `sessions.json#/Session` from a
 Nothing reads the files apart. `kestrel_operator_types::document::bundle` (Rust) and
 `packages/client/src/operator/document.ts` (the browser Client) assemble one document: every schema
 of every schema file a reference reaches joins `components.schemas` under its name, and each
-reference becomes `#/components/schemas/<name>`. A name two files define is refused. Both read the
+reference becomes `#/components/schemas/<name>`. A name two files define is refused, and so is a
+file under `openapi/operator/` that no reference reaches. Both read the
 fixtures in `crates/kestrel-operator-types/tests/document/`, so a change to the rules changes both.
 Add a path to the index in the root, and a schema to the area file whose paths use it.
 

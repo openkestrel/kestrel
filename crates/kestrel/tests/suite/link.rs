@@ -1297,10 +1297,7 @@ fn published_transcript_reads_describe_activities_ranges_and_snapshots() {
             "/operator/organizations/{organization}/workspaces/{workspace}/transcript",
         ),
     ] {
-        let document = kestrel_operator_types::document::bundle(
-            &support::crate_root().join("../../openapi").join(document),
-        )
-        .unwrap();
+        let document = support::published_document(document);
         let parameters = document["paths"][path]["get"]["parameters"]
             .as_array()
             .unwrap();

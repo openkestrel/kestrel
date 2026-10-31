@@ -3,7 +3,7 @@
     "get": {
       "responses": {
         "200": { "content": { "application/json": { "schema": { "$ref": "../schemas/things.json#/Thing" } } } },
-        "404": { "$ref": "../operator.json#/components/responses/Refused" }
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" }
       }
     }
   }

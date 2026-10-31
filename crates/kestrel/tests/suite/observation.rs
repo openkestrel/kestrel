@@ -424,10 +424,7 @@ async fn a_stopped_session_holds_no_observation() {
 
 #[test]
 fn the_published_operator_document_describes_the_observation_on_session_reads_and_state() {
-    let document = kestrel_operator_types::document::bundle(
-        &support::crate_root().join("../../openapi/operator.json"),
-    )
-    .unwrap();
+    let document = support::published_document("operator.json");
     for schema in ["Session", "TranscriptSessionState"] {
         let schema = &document["components"]["schemas"][schema];
         assert_eq!(

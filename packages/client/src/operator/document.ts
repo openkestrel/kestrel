@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -17,7 +17,8 @@ function target(reference: string, base: string): [string, string] {
 /**
  * Reads the OpenAPI document rooted at `root` and the files its `$ref`s name as one document, as
  * `kestrel_operator_types::document::bundle` does: every other file a reference reaches outside the
- * root's `paths` is a map of named schemas, which all join the root's own `components.schemas`.
+ * root's `paths` is a map of named schemas, which all join the root's own `components.schemas`. A
+ * JSON file in the directory named for the root that no reference reaches is refused.
  */
 export function bundle(root: string): JsonObject {
 	root = realpathSync(root);
@@ -107,5 +108,14 @@ export function bundle(root: string): JsonObject {
 			throw new Error(`${owners.get(name)} names the schema ${name}, which the root already names`);
 		own[name] = schema;
 	}
+	const beside = root.replace(/\.json$/, "");
+	const stray = existsSync(beside)
+		? readdirSync(beside, { recursive: true, encoding: "utf8" })
+				.filter((file) => file.endsWith(".json"))
+				.map((file) => realpathSync(join(beside, file)))
+				.find((file) => !files.has(file))
+		: undefined;
+	if (stray !== undefined)
+		throw new Error(`${stray} is beside the root, but no reference reaches it`);
 	return bundled;
 }

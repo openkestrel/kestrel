@@ -8,7 +8,8 @@ use serde_json::{Map, Value};
 
 /// Reads the OpenAPI document rooted at `root` and the files its `$ref`s name as one document:
 /// every other file a reference reaches outside the root's `paths` is a map of named schemas, which
-/// all join the root's own `components.schemas` under their names.
+/// all join the root's own `components.schemas` under their names. A JSON file in the directory
+/// named for the root (`operator/` beside `operator.json`) that no reference reaches is refused.
 pub fn bundle(root: &Path) -> io::Result<Value> {
     let root = fs::canonicalize(root)?;
     let mut bundle = Bundle {
@@ -49,7 +50,36 @@ pub fn bundle(root: &Path) -> io::Result<Value> {
             ));
         }
     }
+    if let Some(stray) = json_files(&root.with_extension(""))?
+        .into_iter()
+        .find(|file| !bundle.files.contains_key(file))
+    {
+        return Err(refused(
+            &stray,
+            "is beside the root, but no reference reaches it",
+        ));
+    }
     Ok(Value::Object(bundled))
+}
+
+fn json_files(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(directory) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        entries => entries?,
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = fs::canonicalize(entry?.path())?;
+        if path.is_dir() {
+            files.extend(json_files(&path)?);
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }
 
 struct Bundle {

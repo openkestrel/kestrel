@@ -7073,7 +7073,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
 
 #[test]
 fn the_published_operator_document_describes_the_boundary_the_control_plane_serves() {
-    let document = published();
+    let document = support::published_document("operator.json");
 
     assert_eq!(document["openapi"], "3.1.0");
     assert_eq!(document["security"], serde_json::json!([]));
@@ -7206,7 +7206,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
 
 #[test]
 fn the_published_operator_document_describes_every_transcript_entry() {
-    let document = published();
+    let document = support::published_document("operator.json");
     let mapping = document["components"]["schemas"]["Entry"]["discriminator"]["mapping"]
         .as_object()
         .expect("an object of entry kinds");
@@ -7319,17 +7319,10 @@ fn the_published_operator_document_describes_every_transcript_entry() {
     assert_eq!(kinds, mapping.keys().cloned().collect::<Vec<_>>());
 }
 
-fn published() -> Value {
-    kestrel_operator_types::document::bundle(
-        &support::crate_root().join("../../openapi/operator.json"),
-    )
-    .expect("a readable openapi document")
-}
-
 /// The documented answer for this status must exist, and it must agree with the boundary on
 /// whether there is a JSON body at all.
 fn conforms(path: &str, method: &str, status: StatusCode, body: &Value) {
-    let document = published();
+    let document = support::published_document("operator.json");
     let (_, operations) = document["paths"]
         .as_object()
         .expect("an object of paths")

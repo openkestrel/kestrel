@@ -18,4 +18,8 @@ describe("a split operator document", () => {
 	it("refuses a schema name two files define", () => {
 		expect(() => bundle(fixture("collision/operator.json"))).toThrow(/Thing/);
 	});
+
+	it("refuses a file beside the root that no reference reaches", () => {
+		expect(() => bundle(fixture("unreached/operator.json"))).toThrow(/stray\.json/);
+	});
 });
