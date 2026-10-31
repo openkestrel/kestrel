@@ -277,6 +277,8 @@ test("a repository is chosen only after the App is installed, across pages and a
 	await expect(projectForm(page).getByLabel("Repository", { exact: true })).toHaveValue(
 		"acme/repo",
 	);
+	await expect(projectForm(page).getByLabel("Reach GitHub as")).toHaveValue("github");
+	await expect(projectForm(page).getByLabel("Checkout base branch")).toHaveValue("");
 });
 
 test("connecting starts an App flow from the Client's own origin and returns to the completion route", async ({

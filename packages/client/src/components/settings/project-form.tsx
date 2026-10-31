@@ -76,7 +76,6 @@ export function ProjectForm({
 			await queryClient.invalidateQueries({ queryKey: ["readiness"] });
 			onSaved(project);
 		},
-		// A refused save returns to the inputs, each still as entered.
 		onError: () => setReviewed(null),
 	});
 

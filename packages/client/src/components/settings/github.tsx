@@ -40,12 +40,14 @@ const CONNECT_IDS = { name: "github-name", app_organization: "github-app-organiz
 
 export function ConnectGithub({
 	organization,
+	named = "github",
 	nested = false,
 }: {
 	organization: string;
+	named?: string;
 	nested?: boolean;
 }) {
-	const [name, setName] = useState("github");
+	const [name, setName] = useState(named);
 	const [owner, setOwner] = useState("");
 	const starting = useMutation({
 		mutationFn: () => startGithubApp(organization, name, owner),
@@ -240,7 +242,7 @@ function Flow({ organization, flow }: { organization?: string; flow: string }) {
 								: "GitHub's one-time App conversion failed or could not be confirmed, so this setup cannot continue."}
 					</p>
 					<p className="text-muted-foreground text-xs">{shown.guidance}</p>
-					{scope && <ConnectGithub organization={scope} />}
+					{scope && <ConnectGithub organization={scope} named={shown.name} />}
 				</section>
 			)}
 			{shown && (stage === "installing" || stage === "choosing") && (
@@ -408,14 +410,20 @@ function Connected({ flow, chosen }: { flow: GithubAppFlow; chosen?: GithubAppRe
 			</output>
 		);
 
-	const repository: GithubAppRepository = chosen ?? {
-		id: 0,
-		repository: flow.repository ?? "",
-		default_branch: "",
-		private: true,
-	};
 	return (
 		<>
+			{integrations.isPending && <Skeleton className="h-16 w-full" />}
+			{integrations.isError && (
+				<div data-integrations-read="failed" className="grid gap-1 text-sm">
+					<Refusal error={integrations.error} retry={() => void integrations.refetch()} />
+					<RetryFallback
+						error={integrations.error}
+						retry={() => void integrations.refetch()}
+						label="Read the Integrations again"
+						disabled={integrations.isFetching}
+					/>
+				</div>
+			)}
 			{projects.isError && (
 				<div data-projects-read="failed" className="grid gap-1 text-sm">
 					<Refusal error={projects.error} retry={() => void projects.refetch()} />
@@ -426,14 +434,17 @@ function Connected({ flow, chosen }: { flow: GithubAppFlow; chosen?: GithubAppRe
 					/>
 				</div>
 			)}
-			<ProjectForm
-				organization={flow.organization}
-				purpose="declaration"
-				heading="Declare its Project"
-				initial={chosenRepository(flow, repository)}
-				authorities={authorities(integrations.data ?? [])}
-				onSaved={setSaved}
-			/>
+			{/* Its Integration is chosen for it, so the form waits until that choice can be shown. */}
+			{integrations.data && (
+				<ProjectForm
+					organization={flow.organization}
+					purpose="declaration"
+					heading="Declare its Project"
+					initial={chosenRepository(flow, chosen)}
+					authorities={authorities(integrations.data)}
+					onSaved={setSaved}
+				/>
+			)}
 		</>
 	);
 }

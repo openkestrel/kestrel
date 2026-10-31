@@ -283,8 +283,11 @@ function RepositoryStep({
 					Use a public repository
 				</Button>
 			</fieldset>
-			{way === "github" && <ConnectGithub organization={organization} nested />}
-			{way === "public" && (
+			{/* Both stay mounted so switching between them keeps what was entered. */}
+			<div hidden={way !== "github"}>
+				<ConnectGithub organization={organization} nested />
+			</div>
+			<div hidden={way !== "public"}>
 				<ProjectForm
 					organization={organization}
 					purpose="public_setup"
@@ -296,7 +299,7 @@ function RepositoryStep({
 						void refresh();
 					}}
 				/>
-			)}
+			</div>
 		</div>
 	);
 }

@@ -148,6 +148,21 @@ describe("chosenRepository", () => {
 	});
 });
 
+describe("chosenRepository after a reload", () => {
+	it("keeps the flow's repository and guesses no default branch", () => {
+		expect(
+			chosenRepository(
+				{ ...flow, phase: "completed", integration: "github", repository: "acme/repo" },
+				undefined,
+			),
+		).toEqual({
+			name: "repo",
+			branch: "",
+			repositories: [{ address: "acme/repo", integration: "github" }],
+		});
+	});
+});
+
 describe("flowStage", () => {
 	it("waits for the installation before any repository can be chosen", () => {
 		expect(flowStage({ ...flow, phase: "ready" })).toBe("installing");
@@ -156,7 +171,7 @@ describe("flowStage", () => {
 		expect(flowStage(flow)).toBe("choosing");
 	});
 
-	it("is connected only once the flow names its Integration", () => {
+	it("is connected once the flow completes", () => {
 		expect(flowStage({ ...flow, phase: "completed", integration: "github" })).toBe("connected");
 	});
 

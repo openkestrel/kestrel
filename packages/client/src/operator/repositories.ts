@@ -41,7 +41,7 @@ export const flowQuery = (flow: string) =>
 			operator.read<GithubAppFlow>(operatorPath("github-app", "flows", flow), { signal }),
 	});
 
-export const PER_PAGE = 30;
+const PER_PAGE = 30;
 
 export const flowRepositoriesQuery = (flow: string, page: number) =>
 	queryOptions({
@@ -56,7 +56,7 @@ export const flowRepositoriesQuery = (flow: string, page: number) =>
 			),
 	});
 
-// The operator pages GitHub returns to sit behind the Client's own origin, which is loopback in every supported install.
+// GitHub returns to the operator pages behind the Client's own origin, so that origin is the callback base.
 export function startGithubApp(
 	organization: string,
 	name: string,
@@ -177,25 +177,27 @@ export function draftOfProject(project: Project): ProjectDraft {
 	};
 }
 
+// Without the row it was chosen from, as after a reload, no default branch is guessed.
 export function chosenRepository(
 	flow: GithubAppFlow,
-	repository: GithubAppRepository,
+	repository: GithubAppRepository | undefined,
 ): ProjectDraft {
+	const address = repository?.repository ?? flow.repository ?? "";
 	return {
-		name: repository.repository.split("/").at(-1) ?? repository.repository,
-		branch: repository.default_branch,
-		repositories: [{ address: repository.repository, integration: flow.integration ?? "" }],
+		name: address.split("/").at(-1) ?? address,
+		branch: repository?.default_branch ?? "",
+		repositories: [{ address, integration: flow.integration ?? "" }],
 	};
 }
 
-export type FlowStage = "installing" | "choosing" | "connected" | "ended";
+type FlowStage = "installing" | "choosing" | "connected" | "ended";
 
 const ENDED = new Set<GithubAppFlow["phase"]>(["cancelled", "expired", "conversion_failed"]);
 
 export function flowStage(flow: GithubAppFlow): FlowStage {
 	if (ENDED.has(flow.phase)) return "ended";
 	if (flow.phase === "select_repository") return "choosing";
-	if (flow.phase === "completed" && flow.integration !== null) return "connected";
+	if (flow.phase === "completed") return "connected";
 	return "installing";
 }
 
