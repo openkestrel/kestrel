@@ -424,9 +424,8 @@ async fn a_stopped_session_holds_no_observation() {
 
 #[test]
 fn the_published_operator_document_describes_the_observation_on_session_reads_and_state() {
-    let document: Value = serde_json::from_str(
-        &std::fs::read_to_string(support::crate_root().join("../../openapi/operator.json"))
-            .unwrap(),
+    let document = kestrel_operator_types::document::bundle(
+        &support::crate_root().join("../../openapi/operator.json"),
     )
     .unwrap();
     for schema in ["Session", "TranscriptSessionState"] {

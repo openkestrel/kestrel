@@ -1,0 +1,451 @@
+{
+  "RepositoryDiff": {
+    "type": "object",
+    "properties": {
+      "repository": {
+        "type": "string"
+      },
+      "diff": {
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "$ref": "#/FileStat"
+        }
+      }
+    },
+    "required": [
+      "repository",
+      "diff",
+      "files",
+      "truncated"
+    ]
+  },
+  "FileStat": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "added": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 0
+      },
+      "removed": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 0
+      }
+    },
+    "required": [
+      "path",
+      "added",
+      "removed"
+    ]
+  },
+  "RepositoryText": {
+    "type": "object",
+    "properties": {
+      "repository": {
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repository",
+      "text"
+    ]
+  },
+  "WorkspaceChanges": {
+    "type": "object",
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryDiff"
+        }
+      }
+    },
+    "required": [
+      "repositories"
+    ]
+  },
+  "WorkspaceCommits": {
+    "type": "object",
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryText"
+        }
+      }
+    },
+    "required": [
+      "repositories"
+    ]
+  },
+  "WorkspaceStashes": {
+    "type": "object",
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryText"
+        }
+      }
+    },
+    "required": [
+      "repositories"
+    ]
+  },
+  "WorkChanges": {
+    "type": "object",
+    "properties": {
+      "files": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "added": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "removed": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "files",
+      "added",
+      "removed"
+    ]
+  },
+  "WorkCommits": {
+    "type": "object",
+    "properties": {
+      "commits": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "added": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "removed": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "commits",
+      "added",
+      "removed"
+    ]
+  },
+  "WorkRepositoryRead": {
+    "type": "object",
+    "properties": {
+      "repository": {
+        "type": "string"
+      },
+      "git": {
+        "const": "read"
+      },
+      "branch": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "changed": {
+        "$ref": "#/WorkChanges"
+      },
+      "staged": {
+        "$ref": "#/WorkChanges"
+      },
+      "committed": {
+        "$ref": "#/WorkCommits"
+      },
+      "pushed": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "untracked": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "stashed": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "repository",
+      "git",
+      "branch",
+      "changed",
+      "staged",
+      "committed",
+      "pushed",
+      "untracked",
+      "stashed"
+    ]
+  },
+  "WorkRepositoryUnreadable": {
+    "type": "object",
+    "properties": {
+      "repository": {
+        "type": "string"
+      },
+      "git": {
+        "const": "unreadable"
+      },
+      "because": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "repository",
+      "git",
+      "because"
+    ]
+  },
+  "WorkRepository": {
+    "oneOf": [
+      {
+        "$ref": "#/WorkRepositoryRead"
+      },
+      {
+        "$ref": "#/WorkRepositoryUnreadable"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "git",
+      "mapping": {
+        "read": "#/components/schemas/WorkRepositoryRead",
+        "unreadable": "#/components/schemas/WorkRepositoryUnreadable"
+      }
+    }
+  },
+  "WorkReported": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "const": "reported"
+      },
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/WorkRepository"
+        }
+      },
+      "reported_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "last_report": {
+        "$ref": "#/WorkLastReport"
+      },
+      "earlier_reports": {
+        "type": "array",
+        "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+        "items": {
+          "$ref": "#/WorkInstanceReport"
+        }
+      }
+    },
+    "required": [
+      "state",
+      "repositories",
+      "reported_at",
+      "last_report",
+      "earlier_reports"
+    ]
+  },
+  "WorkNoInstance": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "const": "no_instance"
+      },
+      "branch": {
+        "type": "string"
+      },
+      "pull_request": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "last_report": {
+        "$ref": "#/WorkLastReport"
+      },
+      "earlier_reports": {
+        "type": "array",
+        "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+        "items": {
+          "$ref": "#/WorkInstanceReport"
+        }
+      }
+    },
+    "required": [
+      "state",
+      "branch",
+      "pull_request",
+      "last_report",
+      "earlier_reports"
+    ]
+  },
+  "WorkNotAnswering": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "const": "not_answering"
+      },
+      "message": {
+        "type": "string"
+      },
+      "last_report": {
+        "$ref": "#/WorkLastReport"
+      },
+      "earlier_reports": {
+        "type": "array",
+        "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+        "items": {
+          "$ref": "#/WorkInstanceReport"
+        }
+      }
+    },
+    "required": [
+      "state",
+      "message",
+      "last_report",
+      "earlier_reports"
+    ]
+  },
+  "WorkLastReport": {
+    "description": "The last complete work report any of the Workspace's Instances sent, kept across link loss, release and restart. It is history: it is no evidence of current Unpublished Work, authorizes no seal or release, and makes no Files or Changes read live.",
+    "oneOf": [
+      {
+        "$ref": "#/WorkNoReport"
+      },
+      {
+        "$ref": "#/WorkInstanceReport"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "report",
+      "mapping": {
+        "none": "#/components/schemas/WorkNoReport",
+        "received": "#/components/schemas/WorkInstanceReport"
+      }
+    }
+  },
+  "WorkNoReport": {
+    "description": "No Instance of the Workspace has sent a work report.",
+    "type": "object",
+    "properties": {
+      "report": {
+        "const": "none"
+      }
+    },
+    "required": [
+      "report"
+    ]
+  },
+  "WorkInstanceReport": {
+    "type": "object",
+    "properties": {
+      "report": {
+        "const": "received"
+      },
+      "instance": {
+        "type": "string",
+        "description": "The Instance that sent the report."
+      },
+      "current_instance": {
+        "type": "boolean",
+        "description": "Whether the Workspace still holds that Instance. When false the report belongs to an Instance it released or replaced, never to its current one."
+      },
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/WorkRepository"
+        }
+      },
+      "reported_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "report",
+      "instance",
+      "current_instance",
+      "repositories",
+      "reported_at"
+    ]
+  },
+  "FileListing": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string", "description": "The directory listed, or empty for the Workspace's repositories." },
+      "entries": { "type": "array", "items": { "$ref": "#/FileEntry" } },
+      "total": { "type": "integer", "minimum": 0, "description": "How many entries the directory holds, including any not listed." },
+      "truncated": { "type": "boolean" }
+    },
+    "required": ["path", "entries", "total", "truncated"]
+  },
+  "FileEntry": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "kind": { "enum": ["file", "directory", "symlink", "other"] },
+      "size": { "type": "integer", "minimum": 0, "description": "Bytes, for a file." },
+      "git": { "enum": ["tracked", "untracked", "ignored"], "description": "Absent for a repository in the Workspace's list of them." }
+    },
+    "required": ["name", "kind"]
+  },
+  "FileText": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" },
+      "text": { "type": "string" }
+    },
+    "required": ["path", "text"]
+  },
+  "WorkspaceWork": {
+    "oneOf": [
+      {
+        "$ref": "#/WorkReported"
+      },
+      {
+        "$ref": "#/WorkNoInstance"
+      },
+      {
+        "$ref": "#/WorkNotAnswering"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "state",
+      "mapping": {
+        "reported": "#/components/schemas/WorkReported",
+        "no_instance": "#/components/schemas/WorkNoInstance",
+        "not_answering": "#/components/schemas/WorkNotAnswering"
+      }
+    }
+  }
+}

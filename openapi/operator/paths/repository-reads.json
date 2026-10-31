@@ -1,0 +1,299 @@
+{
+  "workspaces-workspace-work": {
+    "get": {
+      "operationId": "workspaceWork",
+      "summary": "Read the live and last reported work of a Workspace.",
+      "description": "Returns the latest supervisor report and its arrival time, per repository, while the supervisor is on the link; otherwise why it is unavailable. Alongside either, `last_report` is the last complete report kept durably with the Instance that sent it. The read writes nothing to the Store, Transcript or Event log, and neither the durable checkout observation nor `last_report` is presented as live state.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The live summary, or why no summary is available.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/repository-reads.json#/WorkspaceWork"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "workspaces-workspace-changes": {
+    "get": {
+      "operationId": "workspaceChanges",
+      "summary": "Read changes from a Workspace's live Instance.",
+      "description": "Diff grouped by repository, capped at 2 MiB across all repositories with complete per-file line counts (null for binary files). Unpublished includes untracked files and the working tree against origin/<declared>, or the merge base of HEAD and origin/<base> before the first push. Paths are <repo>/<path>. Reads never write Store, Transcript or Events.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "schema": {
+            "type": "string",
+            "default": "unpublished",
+            "pattern": "^(unpublished|changed|staged|commit:[0-9a-fA-F]+)$"
+          }
+        },
+        {
+          "name": "path",
+          "in": "query",
+          "description": "Repeated literal <repo>/<path> filters.",
+          "style": "form",
+          "explode": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The directory's entries.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/repository-reads.json#/WorkspaceChanges"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "504": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "workspaces-workspace-commits": {
+    "get": {
+      "operationId": "workspaceCommits",
+      "summary": "Read commits from a Workspace's live Instance.",
+      "description": "Commits no remote-tracking branch reaches, on any local branch or detached HEAD, grouped by repository in git log format. Reads never write Store, Transcript or Events.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The directory's entries.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/repository-reads.json#/WorkspaceCommits"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "504": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "workspaces-workspace-stashes": {
+    "get": {
+      "operationId": "workspaceStashes",
+      "summary": "Read stashes from a Workspace's live Instance.",
+      "description": "Stashes grouped by repository in git stash list format; never diffed. Reads never write Store, Transcript or Events.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The directory's entries.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/repository-reads.json#/WorkspaceStashes"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "504": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "workspaces-workspace-files": {
+    "get": {
+      "operationId": "workspaceFiles",
+      "summary": "List one directory of a Workspace's live Instance.",
+      "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. Each entry is marked tracked, untracked or ignored. A directory past 5,000 entries is truncated, and `total` says how many it holds. Symlinks are resolved, and a path outside the Workspace's checkouts is refused. Concurrent identical reads share one request, and an answer is reused for about 5 s.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "path",
+          "in": "query",
+          "required": false,
+          "description": "`<repo>/<path>`. Absent or empty lists the Workspace's repositories.",
+          "schema": { "type": "string" }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The directory's entries.",
+          "content": {
+            "application/json": { "schema": { "$ref": "../schemas/repository-reads.json#/FileListing" } }
+          }
+        },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "504": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace-file": {
+    "get": {
+      "operationId": "workspaceFile",
+      "summary": "Read one file of a Workspace's live Instance.",
+      "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. UTF-8 text up to 1 MiB is answered inline as JSON. A binary file, a file past 1 MiB, or a `raw` read is streamed as `application/octet-stream`, unbuffered and with no cap, and never shared or cached. Symlinks are resolved, and a path outside the Workspace's checkouts is refused.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "path",
+          "in": "query",
+          "required": true,
+          "description": "`<repo>/<path>`.",
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "raw",
+          "in": "query",
+          "required": false,
+          "description": "Stream the bytes even when the file is text under the inline bound.",
+          "schema": { "type": "boolean", "default": false }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The file, inline or raw.",
+          "content": {
+            "application/json": { "schema": { "$ref": "../schemas/repository-reads.json#/FileText" } },
+            "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" } }
+          }
+        },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "504": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

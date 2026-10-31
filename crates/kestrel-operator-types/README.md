@@ -1,7 +1,8 @@
 # Operator wire types
 
-`openapi/operator.json` is the authored contract. This leaf exposes its generated Rust types
-and SSE name mappings; domain builders stay in the control plane and presentation stays in
+`openapi/operator.json` is the authored contract, split across the files under `openapi/operator/`
+that it refers to. This leaf exposes `document::bundle`, which reads them as one document, and the
+generated Rust types and SSE name mappings; domain builders stay in the control plane and presentation stays in
 the Clients. Both Rust consumers depend on the leaf, with their endpoint migrations separate.
 
 Run `cargo run -p kestrel-operator-types --bin generate --features generate` from any workspace

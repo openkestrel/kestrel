@@ -1,0 +1,6 @@
+{
+  "Refusal": {
+    "type": "object",
+    "properties": { "part": { "$ref": "things.json#/Part" }, "inline": { "$ref": "../operator.json#/components/schemas/Inline" } }
+  }
+}

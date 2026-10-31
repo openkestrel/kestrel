@@ -1,0 +1,262 @@
+{
+  "root": {
+    "get": {
+      "operationId": "showApiRoot",
+      "summary": "Say that this is the operator API, and where the browser Client is",
+      "description": "For a person who opens the operator port in a browser. The Client URL is the control plane's `KESTREL_CLIENT_URL`; nothing parses this text.",
+      "responses": {
+        "200": {
+          "description": "Plain text naming the API and the configured Client URL.",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "harnesses": {
+    "get": {
+      "operationId": "listHarnesses",
+      "summary": "Read the product harness catalogue",
+      "responses": {
+        "200": {
+          "description": "Catalogue metadata, each row with its availability in the configured image, inspected afresh; no sign-in is performed.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "../schemas/harnesses.json#/HarnessCatalogueEntry"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "harnesses-harness-sign-in-methods-method": {
+    "get": {
+      "operationId": "showSignInMethod",
+      "summary": "Read a supported harness and Sign-in Method combination",
+      "responses": {
+        "200": {
+          "description": "Catalogue metadata; no image inspection or sign-in is performed.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/harnesses.json#/SignInMethod"
+              }
+            }
+          }
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      },
+      "parameters": [
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  },
+  "operator": {
+    "get": {
+      "operationId": "showOperator",
+      "responses": {
+        "200": {
+          "description": "Operator",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/operator-setup.json#/Operator"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    },
+    "put": {
+      "operationId": "nameOperator",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/operator-setup.json#/OperatorDeclaration"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Operator",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/operator-setup.json#/Operator"
+              }
+            }
+          }
+        },
+        "201": {
+          "description": "Operator",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/operator-setup.json#/Operator"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "install": {
+    "get": {
+      "operationId": "showInstall",
+      "summary": "Read what is true of the install whatever is declared in it.",
+      "responses": {
+        "200": {
+          "description": "Install",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/operator-setup.json#/Install"
+              }
+            }
+          }
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "readiness": {
+    "get": {
+      "operationId": "showReadiness",
+      "summary": "Read whether work can start, and what is missing when it cannot.",
+      "description": "A successful read whatever it finds (ADR-0052): `outcome` says ready, blocked or unavailable. With no harness, Sign-in Method, Profile or Project named it looks for any usable path, so a broken sign-in nothing depends on is a warning; with one named it tests that path. It writes nothing, asks no provider, starts no relay and never pulls an image.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "query",
+          "required": false,
+          "description": "The Organization to read. Omitted, it is the only one that exists; several and none named is an `ambiguous_reference`, never a choice.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "query",
+          "required": false,
+          "description": "Test the path that starts work on this harness, rather than looking for any usable one.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "model",
+          "in": "query",
+          "required": false,
+          "description": "Hold the path to what is known of this model: another model's result never stands in for it.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "profile",
+          "in": "query",
+          "required": false,
+          "description": "The Subscription Profile the work would name. Omitted, it is the Operator's own that holds the harness's subscription, as an open takes it.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "sign_in_method",
+          "in": "query",
+          "required": false,
+          "description": "Test this Sign-in Method, rather than the one an open naming none would take.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "project",
+          "in": "query",
+          "required": false,
+          "description": "Test that this Project is declared, rather than that any is.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Readiness",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/operator-setup.json#/Readiness"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  }
+}

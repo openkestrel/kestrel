@@ -1,0 +1,278 @@
+{
+  "SetupGapContext": {
+    "properties": {
+      "prerequisite": { "type": "string" },
+      "resource": {
+        "anyOf": [{ "$ref": "refusals.json#/Resource" }, { "type": "null" }]
+      },
+      "reference": { "type": ["string", "null"] },
+      "organization": { "type": ["string", "null"] },
+      "harness": { "type": ["string", "null"] },
+      "method": { "type": ["string", "null"] },
+      "sign_in": { "type": ["string", "null"] },
+      "image": { "type": ["string", "null"] }
+    },
+    "required": ["prerequisite", "resource", "reference", "organization", "harness", "method", "sign_in", "image"]
+  },
+  "SetupGapDiagnostic": {
+    "properties": {
+      "kind": { "const": "setup_gap" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/SetupGapContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "UnavailableContext": {
+    "properties": {
+      "service": { "type": "string" },
+      "resource": { "type": ["string", "null"] },
+      "operation": { "type": "string" },
+      "retry_after_seconds": { "type": ["integer", "null"] },
+      "saved": {
+        "description": "What a write saved before the service it then asked could not answer.",
+        "anyOf": [{ "$ref": "sign-ins.json#/SavedSignIn" }, { "type": "null" }]
+      }
+    },
+    "required": ["service", "resource", "operation", "retry_after_seconds", "saved"]
+  },
+  "UnavailableDiagnostic": {
+    "properties": {
+      "kind": { "const": "unavailable" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/UnavailableContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "InstanceTimeoutContext": {
+    "properties": {
+      "workspace": { "type": "string" },
+      "instance": { "type": ["string", "null"] },
+      "operation": { "type": "string" }
+    },
+    "required": ["workspace", "instance", "operation"]
+  },
+  "CredentialRejectedContext": {
+    "properties": {
+      "organization": { "type": "string" },
+      "harness": { "type": "string" },
+      "method": { "type": "string" },
+      "provider": { "type": "string" },
+      "status": { "type": ["integer", "null"] },
+      "provider_error": {
+        "type": ["string", "null"],
+        "description": "The provider's error type or code, never its message."
+      }
+    },
+    "required": ["organization", "harness", "method", "provider", "status", "provider_error"]
+  },
+  "CredentialRejectedDiagnostic": {
+    "description": "A provider refused the credential itself when it was saved, so whatever was saved before is kept.",
+    "properties": {
+      "kind": { "const": "credential_rejected" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/CredentialRejectedContext" },
+      "next_steps": { "type": "array", "items": { "$ref": "actions.json#/Action" } }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "InstanceTimeoutDiagnostic": {
+    "properties": {
+      "kind": { "const": "instance_timeout" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/InstanceTimeoutContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "AuthenticationFailedContext": {
+    "properties": {
+      "session": { "type": "string" },
+      "harness": { "type": "string" },
+      "image": { "type": ["string", "null"] },
+      "evidence": { "$ref": "#/AuthenticationRequiredEvidence" },
+      "sign_in": { "type": ["string", "null"], "description": "The catalogued Sign-in Method the failure is about, when one is established." },
+      "attribution": {
+        "type": "string",
+        "enum": ["established", "uncertain", "unattributed"],
+        "description": "established: the method selected, or the only catalogued sign-in the harness was handed. uncertain: it was handed several and nothing says which it refused, so none is blamed. unattributed: it was handed none kestrel catalogues."
+      },
+      "candidates": { "type": "array", "items": { "type": "string" }, "description": "The methods an uncertain failure could be about; empty otherwise." },
+      "holding": { "anyOf": [{ "$ref": "sign-ins.json#/SignInHolding" }, { "type": "null" }], "description": "Where the established sign-in is held." },
+      "revision": { "type": ["integer", "null"], "format": "int64", "description": "The revision of the established sign-in the harness was handed." },
+      "current": { "type": ["boolean", "null"], "description": "Whether that revision is still what is held. Only a current revision is marked as needing attention; a replaced one keeps this diagnosis." },
+      "expired": {
+        "type": ["boolean", "null"],
+        "description": "Established only from evidence; never inferred from arbitrary harness output."
+      },
+      "covered": { "type": ["boolean", "null"] }
+    },
+    "required": ["session", "harness", "image", "evidence", "sign_in", "attribution", "candidates", "holding", "revision", "current", "expired", "covered"]
+  },
+  "AuthenticationFailedDiagnostic": {
+    "properties": {
+      "kind": { "const": "authentication_failed" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/AuthenticationFailedContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "ExecutableMissingContext": {
+    "properties": {
+      "session": { "type": "string" },
+      "harness": { "type": "string" },
+      "image": { "type": ["string", "null"] },
+      "executable": { "type": "string" },
+      "evidence": { "$ref": "#/ExecutableMissingEvidence" }
+    },
+    "required": ["session", "harness", "image", "executable", "evidence"]
+  },
+  "ExecutableMissingDiagnostic": {
+    "properties": {
+      "kind": { "const": "executable_missing" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/ExecutableMissingContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "UnknownFailureContext": {
+    "properties": {
+      "session": { "type": ["string", "null"] },
+      "resource": { "type": ["string", "null"] },
+      "evidence": { "anyOf": [{ "$ref": "#/UnknownEvidence" }, { "type": "null" }] }
+    },
+    "required": ["session", "resource", "evidence"]
+  },
+  "AuthenticationRequiredEvidence": {
+    "description": "The agent answered with ACP's authentication-required error.",
+    "properties": {
+      "kind": { "const": "authentication_required" },
+      "code": { "type": "integer" },
+      "methods": { "type": "array", "items": { "type": "string" }, "description": "The ids of the ACP auth methods the agent offered." },
+      "method": { "type": ["string", "null"], "description": "The ACP auth method the supervisor was configured to log in with." }
+    },
+    "required": ["kind", "code", "methods", "method"]
+  },
+  "ExecutableMissingEvidence": {
+    "properties": {
+      "kind": { "const": "executable_missing" },
+      "command": { "type": "string" },
+      "error": { "$ref": "#/OsError" }
+    },
+    "required": ["kind", "command", "error"]
+  },
+  "OsError": {
+    "properties": {
+      "kind": { "enum": ["not_found", "permission_denied", "other"] },
+      "code": { "type": ["integer", "null"] }
+    },
+    "required": ["kind", "code"]
+  },
+  "UnknownEvidence": {
+    "description": "What the agent said, bounded and redacted. It never establishes that a sign-in expired or is not covered.",
+    "properties": {
+      "kind": { "const": "unknown" },
+      "summary": { "type": "string", "maxLength": 1024 }
+    },
+    "required": ["kind", "summary"]
+  },
+  "UnknownFailureDiagnostic": {
+    "properties": {
+      "kind": { "const": "unknown_failure" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/UnknownFailureContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "ConnectionFailedContext": {
+    "properties": {
+      "url": { "type": "string" },
+      "operation": { "type": "string" }
+    },
+    "required": ["url", "operation"]
+  },
+  "ConnectionFailedDiagnostic": {
+    "properties": {
+      "kind": { "const": "connection_failed" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/ConnectionFailedContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "ClientFailureContext": {
+    "properties": {
+      "operation": { "type": "string" },
+      "evidence": { "type": ["string", "null"] }
+    },
+    "required": ["operation", "evidence"]
+  },
+  "ClientFailureDiagnostic": {
+    "properties": {
+      "kind": { "const": "client_failure" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/ClientFailureContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "UnknownResponseContext": {
+    "properties": {
+      "service": { "type": "string" },
+      "operation": { "type": "string" },
+      "status": { "type": ["integer", "null"] },
+      "evidence": { "type": ["string", "null"] }
+    },
+    "required": ["service", "operation", "status", "evidence"]
+  },
+  "UnknownResponseDiagnostic": {
+    "properties": {
+      "kind": { "const": "unknown_response" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/UnknownResponseContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  }
+}

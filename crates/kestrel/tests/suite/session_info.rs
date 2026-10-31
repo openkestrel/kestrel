@@ -1,6 +1,5 @@
 use crate::support;
 
-use std::fs;
 use std::time::Duration;
 
 use kestrel::domain::{SessionId, SessionState};
@@ -487,11 +486,10 @@ async fn a_repeat_read_with_the_etag_answers_304_and_a_change_answers_200_with_a
 
 #[test]
 fn the_published_operator_document_describes_the_session_reads_etag() {
-    let document: Value = serde_json::from_str(
-        &fs::read_to_string(support::crate_root().join("../../openapi/operator.json"))
-            .expect("a readable openapi document"),
+    let document = kestrel_operator_types::document::bundle(
+        &support::crate_root().join("../../openapi/operator.json"),
     )
-    .expect("valid json");
+    .expect("a readable openapi document");
 
     let read = &document["paths"][kestrel::operator::SESSION]["get"]["responses"];
     assert!(

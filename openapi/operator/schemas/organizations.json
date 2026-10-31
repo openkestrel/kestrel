@@ -1,0 +1,461 @@
+{
+  "OrganizationDeclaration": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "max_live_instances": {
+        "type": ["integer", "null"],
+        "minimum": 1,
+        "description": "The most active, idle, or held Instances this Organization may keep live. Null means unbounded."
+      }
+    },
+    "required": [
+      "name"
+    ]
+  },
+  "Organization": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "name": {
+        "type": "string"
+      },
+      "max_live_instances": {
+        "type": ["integer", "null"],
+        "minimum": 1
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "max_live_instances"
+    ]
+  },
+  "RepositoryResolutionRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "purpose": {
+        "$ref": "#/RepositoryPurpose"
+      },
+      "organization": {
+        "type": "string",
+        "description": "The Organization whose Integrations `integrations` names; required with it."
+      },
+      "integrations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryIntegrationSelection"
+        },
+        "description": "As a Project declaration selects them. Only a `declaration` takes any."
+      }
+    },
+    "required": [
+      "repositories"
+    ]
+  },
+  "RepositoryPurpose": {
+    "type": "string",
+    "enum": [
+      "declaration",
+      "public_setup"
+    ],
+    "description": "`declaration`, the default, takes every transport a Project does. `public_setup` takes only an HTTPS address or GitHub shorthand, since public-repository setup selects no Integration."
+  },
+  "RepositoryResolution": {
+    "type": "object",
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/ResolvedRepository"
+        }
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryWarning"
+        }
+      }
+    },
+    "required": [
+      "repositories",
+      "warnings"
+    ]
+  },
+  "ResolvedRepository": {
+    "type": "object",
+    "properties": {
+      "given": {
+        "type": "string"
+      },
+      "address": {
+        "type": "string",
+        "description": "What a declaration holds and a checkout clones."
+      },
+      "checkout_directory": {
+        "type": "string",
+        "description": "The directory under the Workspace the repository is checked out into."
+      },
+      "integration": {
+        "type": ["string", "null"],
+        "description": "The Integration selected for it, whose App a declaration would ask for the repository and branch before saving."
+      }
+    },
+    "required": [
+      "given",
+      "address",
+      "checkout_directory",
+      "integration"
+    ]
+  },
+  "RepositoryWarning": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "$ref": "#/RepositoryWarningCode"
+      },
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ]
+  },
+  "RepositoryWarningCode": {
+    "type": "string",
+    "enum": [
+      "no_app_push_authority"
+    ]
+  },
+  "ProjectDeclaration": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "repositories": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string"
+        },
+        "description": "The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address."
+      },
+      "integrations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/RepositoryIntegrationSelection"
+        },
+        "description": "The Integration each connected repository reaches GitHub as. Absent or empty selects none: neither a GitHub address nor an Event ever selects one. A repository named here is held as its HTTPS address whatever transport it was given by. Before a selection, its repository or the branch is saved new or changed, the selected App is asked for the repository and the branch."
+      },
+      "branch": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "name",
+      "repositories",
+      "branch"
+    ]
+  },
+  "Project": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "name": {
+        "type": "string"
+      },
+      "repositories": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "integrations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/SelectedIntegration"
+        },
+        "description": "The Integration each connected repository selects, for the Workspaces opened from now on."
+      },
+      "branch": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "repositories",
+      "integrations",
+      "branch"
+    ]
+  },
+  "RepositoryIntegrationSelection": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "repository": {
+        "type": "string",
+        "description": "One of the declared repositories, as given there or as it resolves."
+      },
+      "integration": {
+        "type": "string",
+        "description": "The name of an enabled GitHub Integration in the Organization that carries outbound and watches this repository."
+      }
+    },
+    "required": [
+      "repository",
+      "integration"
+    ]
+  },
+  "SelectedIntegration": {
+    "type": "object",
+    "description": "Selected explicitly, and never replaced by another Integration when this one is disabled or retired.",
+    "properties": {
+      "repository": {
+        "type": "string",
+        "description": "The repository's address as the Project or Workspace holds it."
+      },
+      "integration": {
+        "type": "string",
+        "description": "The Integration's name as it reads now."
+      },
+      "integration_id": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "repository",
+      "integration",
+      "integration_id"
+    ]
+  },
+  "IntegrationRepositories": {
+    "type": "object",
+    "description": "One page of the repositories the Integration's App installation reaches, as GitHub answered this read.",
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/IntegrationRepository"
+        }
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "How many the installation reaches across every page."
+      },
+      "page": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "next_page": {
+        "type": ["integer", "null"],
+        "description": "The page to ask for next, or null after the last."
+      }
+    },
+    "required": [
+      "repositories",
+      "total",
+      "page",
+      "next_page"
+    ]
+  },
+  "IntegrationRepository": {
+    "type": "object",
+    "properties": {
+      "repository": {
+        "type": "string",
+        "description": "`owner/name`."
+      },
+      "address": {
+        "type": "string",
+        "description": "The HTTPS address a declaration selecting this Integration holds it by."
+      },
+      "default_branch": {
+        "type": "string",
+        "description": "As GitHub names it now; never a guess."
+      },
+      "private": {
+        "type": "boolean"
+      },
+      "watched": {
+        "type": "boolean",
+        "description": "Whether this is the one repository the Integration watches, and so the only one a Project can select it for."
+      }
+    },
+    "required": [
+      "repository",
+      "address",
+      "default_branch",
+      "private",
+      "watched"
+    ]
+  },
+  "AgentDeclaration": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "harness": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The Harness that drives it."
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The model it works with. Absent or null names none, and the Harness's own default is the answer."
+      },
+      "mode": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The mode it works in. Absent or null names none, and the Harness's own default is the answer."
+      },
+      "thought_level": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The thought level it works at. Absent or null names none, and the Harness's own default is the answer."
+      }
+    },
+    "required": [
+      "name",
+      "harness"
+    ]
+  },
+  "Agent": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "name": {
+        "type": "string"
+      },
+      "harness": {
+        "type": "string"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "mode": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "thought_level": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "harness",
+      "model",
+      "mode",
+      "thought_level"
+    ]
+  },
+  "StartPlan": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "organization": { "type": "string", "minLength": 1 },
+      "project": { "$ref": "#/ProjectDeclaration" },
+      "agent": { "$ref": "#/AgentDeclaration" },
+      "brief": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The Brief the Workspace starts with, handed to the agent exactly as given."
+      },
+      "credentials": {
+        "type": "array",
+        "description": "Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "variable": { "type": "string", "minLength": 1 },
+            "secret": { "type": "string", "minLength": 1 }
+          },
+          "required": ["variable", "secret"]
+        }
+      }
+    },
+    "required": ["organization", "project", "agent", "brief"]
+  },
+  "Settled": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "created": {
+        "type": "boolean",
+        "description": "Whether the start declared it, rather than finding it declared."
+      }
+    },
+    "required": ["name", "created"]
+  },
+  "Started": {
+    "type": "object",
+    "properties": {
+      "organization": { "$ref": "#/Settled" },
+      "project": { "$ref": "#/Settled" },
+      "agent": { "$ref": "#/Settled" },
+      "workspace": { "$ref": "workspaces.json#/Workspace" },
+      "session": { "$ref": "sessions.json#/Session" }
+    },
+    "required": ["organization", "project", "agent", "workspace", "session"]
+  },
+  "Opened": {
+    "type": "object",
+    "description": "A Workspace and the first Session its open enqueued, in one transaction.",
+    "properties": {
+      "workspace": { "$ref": "workspaces.json#/Workspace" },
+      "session": { "$ref": "sessions.json#/Session" }
+    },
+    "required": ["workspace", "session"]
+  },
+  "AgentModel": {
+    "type": "object",
+    "properties": {
+      "model": { "type": ["string", "null"] }
+    }
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "changes": {
+    "get": {
+      "operationId": "changes",
+      "summary": "Stream the Organization's change notices.",
+      "description": "Opens with an `open` event, then sends a `change` event naming each Workspace, Session or queue that changed, at most once per resource per 250 ms. A notice says what changed, never what it changed to. No event carries an id and `Last-Event-ID` is ignored: a notice is a hint to refetch, never a cursor. A subscriber that falls behind the bounded buffer is sent `resync` instead of a silent gap.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The stream is open. `open` and `resync` mean every subscribed view must be refetched; `change` names one resource.",
+          "content": {
+            "text/event-stream": {
+              "schema": {
+                "$ref": "../schemas/changes.json#/ChangesEvent"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "streams": {
+    "put": {
+      "operationId": "reserveStream",
+      "summary": "Reserve a browser tab's one event stream.",
+      "description": "Answers a token that opens the stream and addresses its subscriptions. A reservation with no open connection for the follower lease period, 60 seconds unless configured otherwise, is forgotten, and a reservation is forgotten as soon as its connection closes: after any drop the tab reserves again and re-subscribes each subscription from the last cursor it saw. Reservations and subscriptions live only in the serve role's memory, and a control plane holds at most 256 reservations.",
+      "responses": {
+        "201": {
+          "description": "The stream is reserved.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/changes.json#/StreamReservation"
+              }
+            }
+          }
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "streams-token": {
+    "get": {
+      "operationId": "openStream",
+      "summary": "Open a reserved stream.",
+      "description": "Carries the events of every subscription made under the token, before or after it opens, interleaved. Every event names its subscription, and an entry, Activity or cursor event carries its own Transcript's cursor; no event carries an SSE id and `Last-Event-ID` resumes nothing. A subscription whose own stream would end with `end` sends it and is forgotten. One cut off for any other reason, such as a follower lease that passed, closes the whole stream, so the tab resumes every subscription the same way.",
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The stream is open.",
+          "content": {
+            "text/event-stream": {
+              "schema": {
+                "$ref": "../schemas/changes.json#/StreamEvent"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "streams-token-subscriptions-id": {
+    "put": {
+      "operationId": "subscribeStream",
+      "summary": "Subscribe a reserved stream to an Organization's notices or a Workspace's Transcript.",
+      "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering a follower, anonymous unless it names a `participant`, once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "The tab's name for the subscription, every event of which carries it.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/changes.json#/StreamSubscription"
+            }
+          }
+        }
+      },
+      "responses": {
+        "204": {
+          "description": "The subscription is started."
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    },
+    "delete": {
+      "operationId": "unsubscribeStream",
+      "summary": "End one of a reserved stream's subscriptions.",
+      "description": "Ends the subscription and removes its follower at once. An id the reservation does not hold is already ended.",
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "204": {
+          "description": "The subscription is ended."
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  }
+}

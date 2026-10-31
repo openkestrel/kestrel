@@ -1291,16 +1291,16 @@ async fn the_cli_prints_one_closed_activity_across_reconnects_and_can_disable_su
 #[test]
 fn published_transcript_reads_describe_activities_ranges_and_snapshots() {
     for (document, path) in [
+        ("link.json", "/link/instances/{instance}/entries"),
         (
-            include_str!("../../../../openapi/link.json"),
-            "/link/instances/{instance}/entries",
-        ),
-        (
-            include_str!("../../../../openapi/operator.json"),
+            "operator.json",
             "/operator/organizations/{organization}/workspaces/{workspace}/transcript",
         ),
     ] {
-        let document: serde_json::Value = serde_json::from_str(document).unwrap();
+        let document = kestrel_operator_types::document::bundle(
+            &support::crate_root().join("../../openapi").join(document),
+        )
+        .unwrap();
         let parameters = document["paths"][path]["get"]["parameters"]
             .as_array()
             .unwrap();

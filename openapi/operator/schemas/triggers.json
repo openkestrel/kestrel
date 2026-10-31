@@ -1,0 +1,304 @@
+{
+  "TriggerDeclaration": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "minLength": 1 },
+      "filter": { "type": "object", "description": "A CloudEvents filter of exact, prefix, suffix, all, any, or not." },
+      "every": { "type": "string", "description": "A duration such as `1h`, counted from the declaration, in place of a filter." },
+      "cron": { "type": "string", "description": "Five fields of minute, hour, day of the month, month and day of the week, such as `0 9 * * 1-5`, in place of a filter or an interval." },
+      "zone": { "type": "string", "description": "The IANA time zone a cron expression is read in, such as `America/New_York`." },
+      "brief": { "type": "string", "minLength": 1 },
+      "branch": { "type": ["string", "null"] },
+      "correlation": { "type": ["string", "null"] },
+      "on_miss": { "type": ["string", "null"], "description": "What a correlation miss does: `open` or `ignore`." },
+      "on_open_workspace": { "type": ["string", "null"], "description": "What a firing that correlates to an open Workspace does: `continue` its waiting Session, or `new-session` with this Trigger's Agent. Absent continues." },
+      "project": { "type": "string", "minLength": 1 },
+      "agent": { "type": "string", "minLength": 1 },
+      "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
+      "profile": { "type": ["string", "null"] },
+      "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+      "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+      "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
+    },
+    "required": ["name", "brief", "project", "agent"],
+    "oneOf": [
+      { "$ref": "#/EventTriggerCondition" },
+      { "$ref": "#/IntervalTriggerCondition" },
+      { "$ref": "#/CronTriggerCondition" }
+    ]
+  },
+  "Trigger": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "organization": { "type": "string" },
+      "name": { "type": "string" },
+      "state": { "type": "string", "enum": ["enabled", "disabled:operator", "disabled:firing-budget"] },
+      "disabled_because": { "type": ["string", "null"] },
+      "firing_budget": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "minimum": 1 },
+          "window": { "type": "string" }
+        },
+        "required": ["limit", "window"]
+      },
+      "filter": { "type": ["object", "null"] },
+      "every": { "type": ["string", "null"] },
+      "cron": { "type": ["string", "null"] },
+      "zone": { "type": ["string", "null"] },
+      "admits_outsiders": { "type": "boolean", "description": "Whether the filter fires for Events from people outside the Organization." },
+      "brief": { "type": "string" },
+      "branch": { "type": ["string", "null"] },
+      "correlation": { "type": ["string", "null"] },
+      "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+      "on_open_workspace": { "type": "string", "enum": ["continue", "new-session"] },
+      "project": { "type": "string" },
+      "agent": { "type": "string" },
+      "allows": { "type": "array", "items": { "type": "string" } },
+      "profile": { "type": ["string", "null"] },
+      "model": { "type": ["string", "null"], "description": "The model its Sessions run with, or null for the Agent's or Harness's default." },
+      "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in, or null for the Agent's or Harness's default." },
+      "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at, or null for the Agent's or Harness's default." },
+      "applied": { "type": "boolean", "description": "Whether a trigger file declared it, rather than flags." },
+      "declared_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "model", "mode", "thought_level", "applied", "declared_at"]
+  },
+  "TriggerTest": {
+    "type": "object",
+    "properties": {
+      "event": { "type": ["string", "null"], "format": "uuid" },
+      "integration": { "type": ["string", "null"], "description": "The GitHub Integration the issue is read through; named with `issue`." },
+      "issue": { "type": ["integer", "null"], "description": "Render against the Event a dispatch of this issue would record, recording nothing. Excludes `event`." },
+      "instruction": { "type": ["string", "null"] },
+      "agent": { "type": ["string", "null"] },
+      "declared": {
+        "anyOf": [{ "$ref": "#/TriggerFile" }, { "type": "null" }],
+        "description": "A trigger file, to test the Trigger as it declares it rather than as it was applied."
+      }
+    }
+  },
+  "TriggerTestResult": {
+    "type": "object",
+    "properties": {
+      "matches": { "type": "boolean" },
+      "brief": { "type": "string" },
+      "branch": { "type": ["string", "null"] },
+      "correlation": { "type": ["string", "null"] },
+      "agent": { "type": "string" },
+      "would": { "type": "string", "enum": ["open_workspace", "continue_session", "new_session", "ignore"], "description": "What a firing would do now: open a Workspace, continue the waiting Session of the open one it correlates to, start a new Session there, or ignore a correlation miss." },
+      "elapsing": { "type": ["string", "null"], "format": "date-time" }
+    },
+    "required": ["matches", "brief", "branch", "correlation", "agent", "would", "elapsing"]
+  },
+  "TriggerFile": {
+    "type": "object",
+    "properties": {
+      "triggers": {
+        "type": "object",
+        "description": "Each Trigger the file applies, keyed by its name; `{}` removes every Trigger a file applied.",
+        "additionalProperties": { "$ref": "#/TriggerFileEntry" }
+      }
+    },
+    "required": ["triggers"],
+    "additionalProperties": false
+  },
+  "TriggerFileEntry": {
+    "type": "object",
+    "properties": {
+      "filter": { "type": "object" },
+      "brief": { "type": "string" },
+      "branch": { "type": ["string", "null"] },
+      "correlation": { "type": ["string", "null"] },
+      "on_miss": { "type": ["string", "null"], "description": "What a correlation miss does: `open` or `ignore`." },
+      "on_open_workspace": { "type": ["string", "null"], "description": "What a firing that correlates to an open Workspace does: `continue` or `new-session`. Absent continues." },
+      "project": { "type": "string" },
+      "agent": { "type": "string" },
+      "allows": { "type": "array", "items": { "type": "string" } },
+      "profile": { "type": ["string", "null"] },
+      "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+      "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+      "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
+    },
+    "required": ["filter", "brief", "project", "agent"],
+    "additionalProperties": false
+  },
+  "AppliedTriggers": {
+    "type": "object",
+    "properties": {
+      "changes": {
+        "type": "array",
+        "items": { "$ref": "declarations.json#/DeclarationChange" }
+      },
+      "admitting_outsiders": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["changes", "admitting_outsiders"]
+  },
+  "TriggerDispatch": {
+    "type": "object",
+    "properties": {
+      "integration": { "type": "string" },
+      "issue": { "type": "integer" },
+      "instruction": { "type": ["string", "null"] },
+      "agent": { "type": ["string", "null"] }
+    },
+    "required": ["integration", "issue"]
+  },
+  "Fired": {
+    "oneOf": [
+      {
+        "$ref": "#/FiredOpened"
+      },
+      {
+        "$ref": "#/FiredFed"
+      },
+      {
+        "$ref": "#/FiredIgnored"
+      }
+    ]
+  },
+  "FiredOpened": {
+    "type": "object",
+    "properties": {
+      "outcome": {
+        "const": "opened"
+      },
+      "event": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "workspace": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "session": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "outcome",
+      "event",
+      "workspace",
+      "session"
+    ]
+  },
+  "FiredFed": {
+    "type": "object",
+    "properties": {
+      "outcome": {
+        "const": "fed"
+      },
+      "event": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "workspace": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "session": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "outcome",
+      "event",
+      "workspace",
+      "session"
+    ]
+  },
+  "FiredIgnored": {
+    "type": "object",
+    "properties": {
+      "outcome": {
+        "const": "ignored"
+      },
+      "event": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "correlation": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "outcome",
+      "event",
+      "correlation"
+    ]
+  },
+  "EventTriggerCondition": {
+    "required": [
+      "filter"
+    ],
+    "not": {
+      "anyOf": [
+        {
+          "required": [
+            "every"
+          ]
+        },
+        {
+          "required": [
+            "cron"
+          ]
+        },
+        {
+          "required": [
+            "zone"
+          ]
+        }
+      ]
+    }
+  },
+  "IntervalTriggerCondition": {
+    "required": [
+      "every"
+    ],
+    "not": {
+      "anyOf": [
+        {
+          "required": [
+            "filter"
+          ]
+        },
+        {
+          "required": [
+            "cron"
+          ]
+        },
+        {
+          "required": [
+            "zone"
+          ]
+        }
+      ]
+    }
+  },
+  "CronTriggerCondition": {
+    "required": [
+      "cron",
+      "zone"
+    ],
+    "not": {
+      "anyOf": [
+        {
+          "required": [
+            "filter"
+          ]
+        },
+        {
+          "required": [
+            "every"
+          ]
+        }
+      ]
+    }
+  }
+}

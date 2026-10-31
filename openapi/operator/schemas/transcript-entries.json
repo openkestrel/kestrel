@@ -1,0 +1,757 @@
+{
+  "PayloadReference": {
+    "type": "object",
+    "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+    "properties": {
+      "payload_id": {
+        "type": "string",
+        "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+      },
+      "bytes": {
+        "type": "integer",
+        "minimum": 65537
+      },
+      "media_type": {
+        "enum": [
+          "text/plain; charset=utf-8",
+          "application/json"
+        ]
+      }
+    },
+    "required": [
+      "payload_id",
+      "bytes",
+      "media_type"
+    ],
+    "additionalProperties": false
+  },
+  "Recorded": {
+    "description": "One Transcript entry, and where it sits in the order.",
+    "type": "object",
+    "properties": {
+      "seq": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 1
+      },
+      "appended_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "entry": {
+        "$ref": "#/Entry"
+      },
+      "kind": {
+        "$ref": "#/TranscriptKind"
+      },
+      "session_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "seq",
+      "appended_at",
+      "entry",
+      "kind",
+      "session_id"
+    ]
+  },
+  "ExpiredEntry": {
+    "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+    "type": "object",
+    "properties": {
+      "type": {
+        "const": "expired"
+      },
+      "expired_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When the sweep replaced the entry."
+      }
+    },
+    "required": [
+      "type",
+      "expired_at"
+    ],
+    "additionalProperties": false
+  },
+  "Entry": {
+    "description": "One completed unit of the Workspace Transcript.",
+    "oneOf": [
+      {
+        "$ref": "#/ParticipantJoined"
+      },
+      {
+        "$ref": "#/Brief"
+      },
+      {
+        "$ref": "#/SessionStarted"
+      },
+      {
+        "$ref": "#/Message"
+      },
+      {
+        "$ref": "#/Messages"
+      },
+      {
+        "$ref": "#/SessionEnded"
+      },
+      {
+        "$ref": "#/TurnInterrupted"
+      },
+      {
+        "$ref": "#/InstanceReleased"
+      },
+      {
+        "$ref": "#/ThoughtEntry"
+      },
+      {
+        "$ref": "#/PlanEntry"
+      },
+      {
+        "$ref": "#/PullRequestEntry"
+      },
+      {
+        "$ref": "#/OptionChangedEntry"
+      },
+      {
+        "$ref": "#/ToolCallEntry"
+      },
+      {
+        "$ref": "#/ExpiredEntry"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "type",
+      "mapping": {
+        "expired": "#/components/schemas/ExpiredEntry",
+        "participant_joined": "#/components/schemas/ParticipantJoined",
+        "brief": "#/components/schemas/Brief",
+        "session_started": "#/components/schemas/SessionStarted",
+        "said": "#/components/schemas/Message",
+        "messages": "#/components/schemas/Messages",
+        "session_ended": "#/components/schemas/SessionEnded",
+        "turn_interrupted": "#/components/schemas/TurnInterrupted",
+        "instance_released": "#/components/schemas/InstanceReleased",
+        "thought": "#/components/schemas/ThoughtEntry",
+        "plan": "#/components/schemas/PlanEntry",
+        "pull_request": "#/components/schemas/PullRequestEntry",
+        "option_changed": "#/components/schemas/OptionChangedEntry",
+        "tool_call": "#/components/schemas/ToolCallEntry"
+      }
+    }
+  },
+  "ParticipantJoined": {
+    "description": "A Participant joined the Workspace.",
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string"
+      },
+      "type": {
+        "const": "participant_joined"
+      }
+    },
+    "required": [
+      "type",
+      "participant"
+    ]
+  },
+  "Brief": {
+    "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "$ref": "#/BriefSource"
+      },
+      "brief": {
+        "$ref": "#/BriefContent"
+      },
+      "type": {
+        "const": "brief"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "type",
+      "source",
+      "brief"
+    ]
+  },
+  "BriefSource": {
+    "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
+    "oneOf": [
+      {
+        "$ref": "#/BriefSourceTrigger"
+      },
+      {
+        "$ref": "#/BriefSourceOperator"
+      }
+    ]
+  },
+  "SessionStarted": {
+    "description": "A Session started on behalf of the Workspace.",
+    "type": "object",
+    "properties": {
+      "session": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "agent": {
+        "description": "The Agent the Session runs.",
+        "type": "string"
+      },
+      "type": {
+        "const": "session_started"
+      }
+    },
+    "required": [
+      "type",
+      "session",
+      "agent"
+    ]
+  },
+  "Message": {
+    "description": "What a Participant said.",
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string"
+      },
+      "message": {
+        "$ref": "#/MessageContent"
+      },
+      "type": {
+        "const": "said"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      },
+      "session_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "completion": {
+        "$ref": "#/Completion"
+      }
+    },
+    "required": [
+      "type",
+      "participant",
+      "message"
+    ]
+  },
+  "Messages": {
+    "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
+    "type": "object",
+    "properties": {
+      "messages": {
+        "$ref": "#/MessageCollection"
+      },
+      "type": {
+        "const": "messages"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "type",
+      "messages"
+    ]
+  },
+  "SpokenMessage": {
+    "description": "One Participant's message within a drained group.",
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string"
+      },
+      "message": {
+        "$ref": "#/MessageContent"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "participant",
+      "message"
+    ]
+  },
+  "SessionEnded": {
+    "description": "A Session ended, and how it went.",
+    "type": "object",
+    "properties": {
+      "session": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "exit": {
+        "$ref": "sessions.json#/Exit"
+      },
+      "type": {
+        "const": "session_ended"
+      }
+    },
+    "required": [
+      "type",
+      "session",
+      "exit"
+    ]
+  },
+  "TurnInterrupted": {
+    "description": "A person interrupted a working Turn without ending the Session.",
+    "type": "object",
+    "properties": {
+      "session": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "participant": {
+        "type": "string"
+      },
+      "type": {
+        "const": "turn_interrupted"
+      }
+    },
+    "required": [
+      "type",
+      "session",
+      "participant"
+    ]
+  },
+  "OptionChangedEntry": {
+    "description": "A person changed one of a Session's options between Turns (ADR-0041).",
+    "type": "object",
+    "properties": {
+      "type": { "const": "option_changed" },
+      "session": { "type": "string", "format": "uuid" },
+      "participant": { "type": "string", "description": "The person who made the change." },
+      "option": { "type": "string", "description": "The harness option's id, or the category when a queued Session's declared value changed." },
+      "category": { "type": "string" },
+      "from": { "type": ["string", "null"], "description": "What the option was set to before the change." },
+      "to": { "type": ["string", "null"], "description": "What it was set to; null when the harness refused." },
+      "refused": { "type": ["string", "null"], "description": "Why the harness refused, when it did." }
+    },
+    "required": ["type", "session", "participant", "option", "category"]
+  },
+  "PullRequestEntry": {
+    "description": "A verified GitHub Event observed a pull request from the Workspace's declared branch in one of its repositories. Learning it starts no work.",
+    "type": "object",
+    "properties": {
+      "type": { "const": "pull_request" },
+      "event": { "type": "string", "format": "uuid", "description": "The Organization Event it was learned from." },
+      "repository": { "type": "string", "description": "The head repository fixed on the Workspace." },
+      "number": { "type": "integer", "minimum": 1 },
+      "url": { "type": "string" },
+      "title": { "type": "string" },
+      "action": { "type": "string", "description": "GitHub's action, such as opened." },
+      "state": { "$ref": "workspaces.json#/PullRequestState" }
+    },
+    "required": ["type", "event", "repository", "number", "url", "title", "action", "state"]
+  },
+  "InstanceReleased": {
+    "description": "A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.",
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string"
+      },
+      "instance": {
+        "type": "string"
+      },
+      "unpublished": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "What it held that existed nowhere else, as judged when it was released; null when it held nothing."
+      },
+      "type": {
+        "const": "instance_released"
+      }
+    },
+    "required": [
+      "type",
+      "participant",
+      "instance",
+      "unpublished"
+    ]
+  },
+  "TranscriptKind": {
+    "type": "string",
+    "enum": [
+      "shared_state",
+      "narration",
+      "detail"
+    ]
+  },
+  "TurnOutcome": {
+    "oneOf": [
+      {
+        "$ref": "#/TurnOutcomeAnswered"
+      },
+      {
+        "$ref": "#/TurnOutcomeCancelled"
+      },
+      {
+        "$ref": "#/TurnOutcomeFailed"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "status"
+    }
+  },
+  "Completion": {
+    "type": "object",
+    "properties": {
+      "started_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "finished_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "turn_outcome": {
+        "oneOf": [
+          {
+            "$ref": "#/TurnOutcome"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "started_at",
+      "finished_at",
+      "turn_outcome"
+    ]
+  },
+  "PlanEntry": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "const": "plan"
+      },
+      "session_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "completion": {
+        "$ref": "#/Completion"
+      },
+      "entries": {
+        "$ref": "#/PlanEntries"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "type",
+      "session_id",
+      "completion",
+      "entries"
+    ]
+  },
+  "ThoughtEntry": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "const": "thought"
+      },
+      "session_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "completion": {
+        "$ref": "#/Completion"
+      },
+      "text": {
+        "$ref": "#/ThoughtContent"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "type",
+      "session_id",
+      "completion",
+      "text"
+    ]
+  },
+  "ToolCallEntry": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "const": "tool_call"
+      },
+      "session_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "call_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "tool_kind": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string",
+        "description": "The status the Harness last reported for the call.",
+        "enum": [
+          "pending",
+          "in_progress",
+          "completed",
+          "failed"
+        ]
+      },
+      "input": {
+        "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+      },
+      "result": {
+        "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+      },
+      "closing_reason": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+        "enum": [
+          "interrupted",
+          "failed",
+          "unresolved",
+          null
+        ]
+      },
+      "completion": {
+        "$ref": "#/Completion"
+      },
+      "payload_fields": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Fields containing payload references; absent means every content field is inline."
+      }
+    },
+    "required": [
+      "type",
+      "session_id",
+      "call_id",
+      "title",
+      "tool_kind",
+      "status",
+      "input",
+      "result",
+      "closing_reason",
+      "completion"
+    ]
+  },
+  "BriefSourceTrigger": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "trigger"
+      },
+      "trigger": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "trigger"
+    ]
+  },
+  "BriefSourceOperator": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "operator"
+      },
+      "participant": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+      }
+    },
+    "required": [
+      "kind",
+      "participant"
+    ]
+  },
+  "TurnOutcomeAnswered": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "const": "answered"
+      },
+      "stop_reason": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "stop_reason"
+    ]
+  },
+  "TurnOutcomeCancelled": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "const": "cancelled"
+      }
+    },
+    "required": [
+      "status"
+    ]
+  },
+  "TurnOutcomeFailed": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "const": "failed"
+      },
+      "because": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "status",
+      "because"
+    ]
+  },
+  "InlineBrief": {
+    "type": "string"
+  },
+  "BriefContent": {
+    "oneOf": [
+      {
+        "$ref": "#/InlineBrief"
+      },
+      {
+        "$ref": "#/PayloadReference"
+      }
+    ]
+  },
+  "InlineMessages": {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+      "$ref": "#/SpokenMessage"
+    }
+  },
+  "MessageCollection": {
+    "oneOf": [
+      {
+        "$ref": "#/InlineMessages"
+      },
+      {
+        "$ref": "#/PayloadReference"
+      }
+    ]
+  },
+  "InlineMessage": {
+    "type": "string"
+  },
+  "MessageContent": {
+    "oneOf": [
+      {
+        "$ref": "#/InlineMessage"
+      },
+      {
+        "$ref": "#/PayloadReference"
+      }
+    ]
+  },
+  "InlinePlanEntries": {
+    "type": "array",
+    "items": {
+      "$ref": "#/PlanStep"
+    }
+  },
+  "PlanStep": {
+    "description": "One step of a plan, as the Harness reported it.",
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "content",
+      "priority",
+      "status"
+    ]
+  },
+  "PlanEntries": {
+    "oneOf": [
+      {
+        "$ref": "#/InlinePlanEntries"
+      },
+      {
+        "$ref": "#/PayloadReference"
+      }
+    ]
+  },
+  "InlineThought": {
+    "type": "string"
+  },
+  "ThoughtContent": {
+    "oneOf": [
+      {
+        "$ref": "#/InlineThought"
+      },
+      {
+        "$ref": "#/PayloadReference"
+      }
+    ]
+  }
+}

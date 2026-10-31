@@ -5,6 +5,23 @@ The [Operator boundary](operator-boundary.md) owns routing, errors and domain-to
 describe the consumers. `openapi/operator.json` is the contract, including operation IDs,
 required fields and typed refusals.
 
+## Where the document lives
+
+`openapi/operator.json` is the root and stays under the file-size budget by holding only the
+document's frame and an index of its paths. Each path's operations live in
+`openapi/operator/paths/<area>.json`, keyed by its segments after `/operator` and the
+Organization prefix, joined by `-` without parameter braces (`sessions-session-stop`); each schema
+lives under its name in `openapi/operator/schemas/<area>.json`. A `$ref` is relative to the file it
+is written in: `#/Session` within a schema file, `sessions.json#/Session` from a sibling, `../schemas/sessions.json#/Session` from a path file, and
+`../../operator.json#/components/responses/Refused` for the root's shared response.
+
+Nothing reads the files apart. `kestrel_operator_types::document::bundle` (Rust) and
+`packages/client/src/operator/document.ts` (the browser Client) assemble one document: every schema
+of every schema file a reference reaches joins `components.schemas` under its name, and each
+reference becomes `#/components/schemas/<name>`. A name two files define is refused. Both read the
+fixtures in `crates/kestrel-operator-types/tests/document/`, so a change to the rules changes both.
+Add a path to the index in the root, and a schema to the area file whose paths use it.
+
 ## Schema or response changes
 
 1. Change the document and the handler's mapping together. Changed endpoints and their Rust CLI

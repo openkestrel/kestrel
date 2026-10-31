@@ -1,0 +1,408 @@
+{
+  "SignInFill": {
+    "oneOf": [
+      {
+        "$ref": "#/SignInVariableFill"
+      },
+      {
+        "$ref": "#/SignInFileFill"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "kind",
+      "mapping": {
+        "variable": "#/components/schemas/SignInVariableFill",
+        "file": "#/components/schemas/SignInFileFill"
+      }
+    }
+  },
+  "SignInVariableFill": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "variable"
+      },
+      "variable": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "variable"
+    ],
+    "additionalProperties": false
+  },
+  "SignInTestRequest": {
+    "type": "object",
+    "properties": {
+      "model": {
+        "type": "string",
+        "description": "The model to test, as the harness names it. Required, as `provider/model`, by a method listing `test_providers`."
+      }
+    },
+    "additionalProperties": false
+  },
+  "SignInTest": {
+    "type": "object",
+    "description": "One explicit test of saved material. What it established is specific to the revision, harness, model and image named here, and to no aliased harness or other model.",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "harness": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "integer",
+        "format": "int64",
+        "description": "The material revision selected when the test started; material replaced before it was handed over fails the test rather than being tested instead."
+      },
+      "requested_model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The model the harness resolved, known before the prompt is sent; null until then, and for a harness that reports none."
+      },
+      "image": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The identity of the image inspected when the test started; null where the compute driver runs no image."
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "interrupted"
+        ],
+        "description": "`completed` only when the model answered. `interrupted` is a test the control plane stopped under, which a restart never resumes."
+      },
+      "outcome": {
+        "anyOf": [
+          {
+            "$ref": "#/SignInTestOutcome"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Null until the test ends, and for an interrupted one."
+      },
+      "message": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Display only, with the material redacted."
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "started_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time"
+      },
+      "finished_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "id",
+      "harness",
+      "method",
+      "revision",
+      "requested_model",
+      "model",
+      "image",
+      "state",
+      "outcome",
+      "message",
+      "created_at",
+      "started_at",
+      "finished_at"
+    ],
+    "additionalProperties": false
+  },
+  "SignInTestOutcome": {
+    "type": "string",
+    "enum": [
+      "worked",
+      "authentication_failed",
+      "not_covered",
+      "unavailable",
+      "harness_failed",
+      "material_replaced"
+    ],
+    "description": "`authentication_failed` and `not_covered` are recorded as evidence against the revision, the latter for this harness and model alone. `unavailable` (the two-minute deadline, or nowhere to run an Instance), `harness_failed` and `material_replaced` record nothing and leave earlier evidence and its time as they were."
+  },
+  "SignInMaterial": {
+    "type": "object",
+    "description": "Never answered back, logged or kept in a diagnostic.",
+    "properties": {
+      "value": {
+        "type": "string",
+        "description": "The token or key, or the login file's whole contents, as the method's input says."
+      }
+    },
+    "required": [
+      "value"
+    ],
+    "additionalProperties": false
+  },
+  "SavedSignIn": {
+    "type": "object",
+    "description": "Material saved for a catalogued Sign-in Method, as everything but the Session it is handed to sees it.",
+    "properties": {
+      "harness": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "subscription",
+          "key"
+        ]
+      },
+      "holding": {
+        "$ref": "#/SignInHolding"
+      },
+      "revision": {
+        "type": "integer",
+        "format": "int64",
+        "description": "Minted for every accepted write of the material, a generic Profile or Provider Credential write included, and never reused."
+      },
+      "refreshed_from": {
+        "type": ["integer", "null"],
+        "format": "int64",
+        "description": "The revision a harness's own refresh advanced to make this one, or null when it was saved, imported or written."
+      },
+      "saved_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "authentication": {
+        "$ref": "#/AuthenticationEvidence"
+      },
+      "model_use": {
+        "type": "array",
+        "description": "The latest result per model of this harness using this revision. A result for one model never stands for another.",
+        "items": {
+          "$ref": "#/ModelUseEvidence"
+        }
+      }
+    },
+    "required": [
+      "harness",
+      "method",
+      "kind",
+      "holding",
+      "revision",
+      "refreshed_from",
+      "saved_at",
+      "authentication",
+      "model_use"
+    ],
+    "additionalProperties": false
+  },
+  "SignInHolding": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "type": "string",
+        "enum": [
+          "subscription_profile",
+          "provider_credential"
+        ]
+      },
+      "reference": {
+        "type": "string",
+        "description": "The Profile's name, or the Provider Credential's variable."
+      },
+      "fills": {
+        "$ref": "#/SignInFill"
+      }
+    },
+    "required": [
+      "resource",
+      "reference",
+      "fills"
+    ],
+    "additionalProperties": false
+  },
+  "AuthenticationEvidence": {
+    "type": "object",
+    "description": "Whether this revision authenticates, which says nothing of whether a harness can use a model with it. `login_completed` is a finished vendor sign-in and `credential_accepted` a provider accepting the one request recorded in `provider_check`; neither is a model call. Expiry and lack of coverage are only ever established by evidence.",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "unchecked",
+          "login_completed",
+          "credential_accepted",
+          "authentication_failed",
+          "expired",
+          "not_covered"
+        ]
+      },
+      "source": {
+        "type": "string",
+        "enum": [
+          "import",
+          "provider_check",
+          "relay",
+          "generic_write",
+          "refresh",
+          "session",
+          "model_test"
+        ]
+      },
+      "observed_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "provider_check": {
+        "anyOf": [
+          {
+            "$ref": "#/ProviderCheck"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "state",
+      "source",
+      "observed_at",
+      "provider_check"
+    ],
+    "additionalProperties": false
+  },
+  "ProviderCheck": {
+    "type": "object",
+    "description": "One authenticated model-metadata read. Only `rejected` says the provider refused the credential; `inconclusive` is a refusal about permission, credit or another matter; `unavailable` includes a timeout and a rate or quota limit.",
+    "properties": {
+      "provider": {
+        "type": "string",
+        "enum": [
+          "anthropic",
+          "openai"
+        ]
+      },
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "rejected",
+          "inconclusive",
+          "unavailable"
+        ]
+      },
+      "status": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "provider_error": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The provider's error type or code, never its message."
+      }
+    },
+    "required": [
+      "provider",
+      "outcome",
+      "status",
+      "provider_error"
+    ],
+    "additionalProperties": false
+  },
+  "ModelUseEvidence": {
+    "type": "object",
+    "properties": {
+      "harness": {
+        "type": "string"
+      },
+      "model": {
+        "type": "string"
+      },
+      "image": {
+        "type": ["string", "null"],
+        "description": "The image a model test ran in; null for a Session, which records none."
+      },
+      "result": {
+        "type": "string",
+        "enum": [
+          "worked",
+          "authentication_failed",
+          "not_covered"
+        ]
+      },
+      "source": {
+        "type": "string",
+        "enum": [
+          "model_test",
+          "session"
+        ]
+      },
+      "observed_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "harness",
+      "model",
+      "image",
+      "result",
+      "source",
+      "observed_at"
+    ],
+    "additionalProperties": false
+  },
+  "SignInFileFill": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "file"
+      },
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "path"
+    ],
+    "additionalProperties": false
+  }
+}

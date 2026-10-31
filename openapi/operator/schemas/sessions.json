@@ -1,0 +1,188 @@
+{
+  "SessionDeclaration": {
+    "type": "object",
+    "properties": {
+      "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session. A Workspace a person opened with no Subscription Profile takes the Operator's own for this Agent's harness as an open does; one an Event opened never does." },
+      "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method this Session's harness is handed, checked as on opening a Workspace. Omitted, the latest Session's while the harness is the same; only naming one switches credentials." },
+      "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+      "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+      "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+      "depends_on": {
+        "type": ["array", "null"],
+        "items": { "type": "string" },
+        "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
+      }
+    }
+  },
+  "Session": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+      "workspace": { "type": "string", "format": "uuid" },
+      "state": { "type": "string", "enum": ["queued", "working", "trailing", "waiting", "unbriefed", "ended", "unreachable"], "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet." },
+      "preparing": {
+        "type": ["string", "null"],
+        "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
+        "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is. Null in every other state."
+      },
+      "exit": { "anyOf": [{ "$ref": "#/Exit" }, { "type": "null" }] },
+      "outcome_message": { "type": ["string", "null"] },
+      "instance": { "type": ["string", "null"] },
+      "supervisor": { "type": ["string", "null"] },
+      "agent": { "type": "string" },
+      "harness": { "type": "string" },
+      "model": { "type": ["string", "null"], "description": "What the Session names for its Harness's model, or null for its Harness's default." },
+      "mode": { "type": ["string", "null"], "description": "What the Session names for its Harness's mode, or null for its Harness's default." },
+      "thought_level": { "type": ["string", "null"], "description": "What the Session names for its Harness's thought level, or null for its Harness's default." },
+      "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
+      "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method selected for this Session, or null when none was." },
+      "supplied": { "type": "array", "description": "What the harness was last spawned with, by revision and never by value; empty until its supervisor takes its credentials.", "items": { "$ref": "#/SuppliedMaterial" } },
+      "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
+      "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "session-options.json#/SessionOption" } },
+      "changing_options": { "type": "array", "description": "Option changes a person asked for while the Session is live, held until the harness answers each (ADR-0041).", "items": { "$ref": "session-options.json#/ChangingOption" } },
+      "commands": { "type": "array", "description": "The commands the harness offers for this Session.", "items": { "$ref": "session-options.json#/SessionCommand" } },
+      "interrupting": { "anyOf": [{ "$ref": "#/Interrupting" }, { "type": "null" }], "description": "Who asked the working Turn to stop, while the request is in flight." },
+      "enqueued_at": { "type": "string", "format": "date-time" },
+      "started_at": { "type": ["string", "null"], "format": "date-time" },
+      "ended_at": { "type": ["string", "null"], "format": "date-time" },
+      "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
+      "connected_at": { "type": ["string", "null"], "format": "date-time" },
+      "supervisor_version": { "type": ["string", "null"] },
+      "usage": { "anyOf": [{ "$ref": "#/Usage" }, { "type": "null" }], "description": "What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported." },
+      "diagnostic": { "anyOf": [{ "$ref": "refusals.json#/Diagnostic" }, { "type": "null" }], "description": "Why the Session failed, from the evidence its supervisor established. Null when it has not failed, or failed with no evidence; its presence never makes the read fail (ADR-0052)." },
+      "tools": { "type": "array", "description": "Tool calls open in the current observation; empty whenever observation is unavailable.", "items": { "$ref": "transcript.json#/RunningTool" } },
+      "units": { "type": "array", "description": "Adapter units open in the current observation, such as a Claude background task or subagent; they keep a trailing Session trailing. Empty whenever observation is unavailable.", "items": { "$ref": "transcript.json#/RunningUnit" } },
+      "message_buffering": { "type": "boolean" },
+      "thought_buffering": { "type": "boolean" },
+      "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." },
+      "observation": { "$ref": "#/SessionObservation" },
+      "depends_on": { "type": "array", "description": "The Sessions this one was declared to wait on, whether or not they have ended.", "items": { "$ref": "#/SessionReference" } }
+    },
+    "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "sign_in_method", "supplied", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "diagnostic", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
+  },
+  "SessionObservation": {
+    "description": "Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.",
+    "oneOf": [
+      { "$ref": "#/SessionObservationCurrent" },
+      { "$ref": "#/SessionObservationUnavailable" }
+    ],
+    "discriminator": {
+      "propertyName": "availability",
+      "mapping": {
+        "current": "#/components/schemas/SessionObservationCurrent",
+        "unavailable": "#/components/schemas/SessionObservationUnavailable"
+      }
+    }
+  },
+  "SessionObservationCurrent": {
+    "type": "object",
+    "properties": {
+      "availability": { "const": "current" },
+      "observed_at": { "type": "string", "format": "date-time", "description": "When the control plane took the snapshot." }
+    },
+    "required": ["availability", "observed_at"]
+  },
+  "SessionObservationUnavailable": {
+    "type": "object",
+    "properties": {
+      "availability": { "const": "unavailable" },
+      "last": { "anyOf": [{ "$ref": "#/LastObservation" }, { "type": "null" }], "description": "The last snapshot this control plane took for the Session, kept until the Session ends; null when it holds none, as after a restart." }
+    },
+    "required": ["availability", "last"]
+  },
+  "LastObservation": {
+    "description": "A historical snapshot of the Session's open work: what was open at observed_at, not proof that it still runs or that the supervisor is reachable.",
+    "type": "object",
+    "properties": {
+      "observed_at": { "type": "string", "format": "date-time" },
+      "tools": { "type": "array", "items": { "$ref": "transcript.json#/RunningTool" } },
+      "units": { "type": "array", "items": { "$ref": "transcript.json#/RunningUnit" } }
+    },
+    "required": ["observed_at", "tools", "units"]
+  },
+  "SuppliedMaterial": {
+    "type": "object",
+    "description": "One variable or file handed to a Session's harness. It keeps the revision handed over after that material is replaced or forgotten.",
+    "properties": {
+      "resource": { "type": "string", "enum": ["subscription_profile", "provider_credential"] },
+      "reference": { "type": "string", "description": "The Profile's name, or the Provider Credential's variable." },
+      "kind": { "type": "string", "enum": ["variable", "file"] },
+      "name": { "type": "string", "description": "The variable, or the file's path beneath the agent's home." },
+      "method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method of the Session's harness this fills, or null for anything else a Profile or Organization holds." },
+      "revision": { "type": "integer", "format": "int64" },
+      "current": { "type": "boolean", "description": "Whether that revision is still what is held." },
+      "handed_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["resource", "reference", "kind", "name", "method", "revision", "current", "handed_at"],
+    "additionalProperties": false
+  },
+  "SessionReference": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" }
+    },
+    "required": ["id", "name"]
+  },
+  "Interrupting": {
+    "type": "object",
+    "description": "A person's request that a Session's working Turn stop.",
+    "properties": {
+      "participant": { "type": "string" },
+      "requested_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["participant", "requested_at"]
+  },
+  "SessionInterrupt": {
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string",
+        "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+      }
+    }
+  },
+  "Exit": {
+    "oneOf": [
+      { "type": "object", "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      { "type": "object", "properties": { "status": { "const": "failed" }, "because": { "type": "string" } }, "required": ["status", "because"] }
+    ]
+  },
+  "Usage": {
+    "type": "object",
+    "properties": {
+      "context_used": { "type": "integer", "minimum": 0 },
+      "context_size": { "type": "integer", "minimum": 0 },
+      "cost": { "anyOf": [{ "$ref": "#/Cost" }, { "type": "null" }] }
+    },
+    "required": ["context_used", "context_size", "cost"]
+  },
+  "Cost": {
+    "type": "object",
+    "properties": {
+      "amount": { "type": "number" },
+      "currency": { "type": "string" }
+    },
+    "required": ["amount", "currency"]
+  },
+  "Exit": {
+    "description": "How a Session ended.",
+    "type": "object",
+    "properties": {
+      "status": {
+        "enum": [
+          "succeeded",
+          "failed"
+        ]
+      },
+      "because": {
+        "type": "string",
+        "description": "Why it failed. Absent when it succeeded."
+      }
+    },
+    "required": [
+      "status"
+    ]
+  }
+}

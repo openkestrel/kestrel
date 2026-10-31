@@ -1,0 +1,170 @@
+{
+  "MissingReferenceContext": {
+    "properties": {
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": "string" },
+      "organization": {
+        "type": ["string", "null"],
+        "description": "Null when the resource is not scoped to an Organization."
+      }
+    },
+    "required": ["resource", "reference", "organization"]
+  },
+  "MissingReferenceDiagnostic": {
+    "properties": {
+      "kind": { "const": "missing_reference" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/MissingReferenceContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "AmbiguousReferenceContext": {
+    "properties": {
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": "string" },
+      "organization": { "type": ["string", "null"] },
+      "candidates": {
+        "type": "array",
+        "items": { "$ref": "refusals.json#/Candidate" }
+      }
+    },
+    "required": ["resource", "reference", "organization", "candidates"]
+  },
+  "AmbiguousReferenceDiagnostic": {
+    "properties": {
+      "kind": { "const": "ambiguous_reference" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/AmbiguousReferenceContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "MalformedRequestContext": {
+    "properties": {
+      "operation": { "type": "string" },
+      "field": { "type": ["string", "null"] }
+    },
+    "required": ["operation", "field"]
+  },
+  "MalformedRequestDiagnostic": {
+    "properties": {
+      "kind": { "const": "malformed_request" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/MalformedRequestContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "ForbiddenActionContext": {
+    "properties": {
+      "operation": { "type": "string" },
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": "string" },
+      "organization": { "type": ["string", "null"] },
+      "constraint": {
+        "type": ["string", "null"],
+        "description": "The existing author/name constraint the action violates, when established."
+      }
+    },
+    "required": ["operation", "resource", "reference", "organization", "constraint"]
+  },
+  "ForbiddenActionDiagnostic": {
+    "properties": {
+      "kind": { "const": "forbidden_action" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/ForbiddenActionContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "StateConflictContext": {
+    "properties": {
+      "operation": { "type": "string" },
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": "string" },
+      "organization": { "type": ["string", "null"] },
+      "state": { "type": "string" },
+      "holding_session": {
+        "type": ["string", "null"],
+        "description": "The Session holding the conflicting state, when the conflict is one."
+      }
+    },
+    "required": ["operation", "resource", "reference", "organization", "state", "holding_session"]
+  },
+  "StateConflictDiagnostic": {
+    "properties": {
+      "kind": { "const": "state_conflict" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/StateConflictContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "ExpiredResourceContext": {
+    "properties": {
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": "string" },
+      "organization": { "type": ["string", "null"] },
+      "operation": { "type": "string" }
+    },
+    "required": ["resource", "reference", "organization", "operation"]
+  },
+  "ExpiredResourceDiagnostic": {
+    "properties": {
+      "kind": { "const": "expired_resource" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/ExpiredResourceContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  },
+  "InvalidFieldContext": {
+    "properties": {
+      "field": { "type": "string" },
+      "constraint": { "type": "string" },
+      "allowed_values": {
+        "type": ["array", "null"],
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["field", "constraint", "allowed_values"]
+  },
+  "InvalidFieldDiagnostic": {
+    "properties": {
+      "kind": { "const": "invalid_field" },
+      "message": { "type": "string" },
+      "field": { "type": ["string", "null"] },
+      "context": { "$ref": "#/InvalidFieldContext" },
+      "next_steps": {
+        "type": "array",
+        "items": { "$ref": "actions.json#/Action" }
+      }
+    },
+    "required": ["kind", "message", "field", "context", "next_steps"]
+  }
+}

@@ -149,8 +149,6 @@ docs/measurements/** linguist-generated=true
 
 /openapi/link.json token-budget-exempt=783
 
-/openapi/operator.json token-budget-exempt=777
-
 /packages/client/e2e/activities.spec.ts token-budget-exempt=846
 
 /packages/client/e2e/composer.spec.ts token-budget-exempt=801

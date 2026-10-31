@@ -1,0 +1,135 @@
+{
+  "EventRecord": {
+    "description": "An Event as kestrel recorded it.",
+    "type": "object",
+    "properties": {
+      "record": {
+        "type": "string",
+        "format": "uuid",
+        "description": "kestrel's own identifier for the record."
+      },
+      "organization": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "integration": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "uuid",
+        "description": "The Integration that recorded it. Null for an Event kestrel minted itself."
+      },
+      "recorded_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "event": {
+        "$ref": "#/CloudEvent"
+      },
+      "firings": {
+        "type": "array",
+        "description": "What each Trigger that matched it did, oldest first.",
+        "items": {
+          "$ref": "#/Firing"
+        }
+      }
+    },
+    "required": [
+      "record",
+      "organization",
+      "integration",
+      "recorded_at",
+      "event",
+      "firings"
+    ]
+  },
+  "Firing": {
+    "description": "One Trigger matching the Event, and what that match did.",
+    "type": "object",
+    "properties": {
+      "trigger": {
+        "type": "string"
+      },
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "opened",
+          "fed",
+          "ignored",
+          "failed",
+          "held",
+          "canceled"
+        ],
+        "description": "A held firing waits on the issue's readiness and is looked at again; a canceled one never started."
+      },
+      "workspace": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "uuid",
+        "description": "The Workspace it opened or fed."
+      },
+      "failure": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Why a failed, held or canceled firing started nothing, such as labels choosing two Agents."
+      },
+      "worked_ahead": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Who started it ahead of the issue's blockers, when a command or a dispatch did."
+      }
+    },
+    "required": [
+      "trigger",
+      "outcome",
+      "workspace",
+      "failure",
+      "worked_ahead"
+    ]
+  },
+  "CloudEvent": {
+    "description": "The Event's CloudEvents envelope and payload.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      },
+      "specversion": {
+        "type": "string"
+      },
+      "type": {
+        "type": "string"
+      },
+      "subject": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "time": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "data": {}
+    },
+    "required": [
+      "id",
+      "source",
+      "specversion",
+      "type",
+      "subject",
+      "time",
+      "data"
+    ]
+  }
+}

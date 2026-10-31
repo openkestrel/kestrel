@@ -1,0 +1,200 @@
+{
+  "WorkspaceDeclaration": {
+    "type": "object",
+    "properties": {
+      "project": { "type": "string", "minLength": 1 },
+      "agent": { "type": "string", "minLength": 1 },
+      "profile": { "type": ["string", "null"], "description": "The Subscription Profile its Sessions use. Omitted, the Operator's own Profile holding a subscription for the Agent's harness, whose one held subscription is then the selected `sign_in_method`; with none, the Organization's Provider Credentials. Several such Profiles are a 409 `several_operator_profiles`, never a choice. A Profile named here is never replaced." },
+      "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method the first Session's harness is handed, by id: one its harness offers, saved in the Organization or in the Profile named here. Selecting one withholds the harness's other catalogued sign-ins, so a refusal never falls back to another. Omitted, everything the Organization and the Profile hold is handed over." },
+      "branch": {
+        "type": ["string", "null"],
+        "description": "Omitted, a branch of the Workspace's own. A continuation runs on the branch of the Workspace it continues."
+      },
+      "continues": {
+        "type": ["string", "null"],
+        "description": "The sealed Workspace this one carries on from, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`."
+      },
+      "model": {
+        "type": ["string", "null"],
+        "description": "The model the first Session runs on. Omitted, the Agent's, then the Harness's default."
+      },
+      "mode": {
+        "type": ["string", "null"],
+        "description": "The mode the first Session runs in. Omitted, the Agent's, then the Harness's default."
+      },
+      "thought_level": {
+        "type": ["string", "null"],
+        "description": "The thought level the first Session runs at. Omitted, the Agent's, then the Harness's default."
+      },
+      "brief": {
+        "type": ["string", "null"],
+        "description": "The Brief the Workspace starts with, handed to the agent exactly as given. Omitted, the first Session waits for its first message to become the Brief."
+      },
+      "participant": {
+        "type": ["string", "null"],
+        "description": "The name the Brief is written under. Omitted, the install's Operator; with none named, its source is the operator and no one joins."
+      },
+      "depends_on": {
+        "type": ["array", "null"],
+        "items": { "type": "string" },
+        "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
+      }
+    },
+    "required": ["project", "agent"]
+  },
+  "WorkspaceMessage": {
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string",
+        "description": "The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+      },
+      "message": { "type": "string" }
+    },
+    "required": ["message"]
+  },
+  "WorkspaceMessageWithdrawal": {
+    "type": "object",
+    "properties": {
+      "participant": {
+        "type": "string",
+        "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+      }
+    }
+  },
+  "HeldMessage": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "integer", "description": "The Workspace's own sequence. Stable and never reused: a taken or withdrawn message keeps it." },
+      "participant": { "type": "string" },
+      "message": { "type": "string" },
+      "posted_at": { "type": "string", "format": "date-time" },
+      "edited_at": { "type": ["string", "null"], "format": "date-time" }
+    },
+    "required": ["id", "participant", "message", "posted_at", "edited_at"]
+  },
+  "Posted": {
+    "type": "object",
+    "properties": {
+      "session": { "anyOf": [{ "$ref": "sessions.json#/Session" }, { "type": "null" }], "description": "The Session the message started or woke, if it started or woke one." },
+      "held_message": { "anyOf": [{ "$ref": "#/HeldMessage" }, { "type": "null" }], "description": "The Held Message the post left, if a Turn could not take it at once." }
+    },
+    "required": ["session", "held_message"]
+  },
+  "Workspace": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+      "organization": { "type": "string" },
+      "project": { "type": "string" },
+      "opened_with": { "type": "string", "description": "The Agent its first Session runs unless that Session names another." },
+      "profile": { "type": ["string", "null"] },
+      "checkout": { "$ref": "#/Checkout" },
+      "integrations": {
+        "type": "array",
+        "items": { "$ref": "organizations.json#/SelectedIntegration" },
+        "description": "The Integration each of its repositories selected when it opened. Redeclaring its Project changes none, and one since disabled or retired still reads here."
+      },
+      "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
+      "held": { "type": ["string", "null"], "description": "Why its Instance is held for work that exists nowhere else, if it is." },
+      "held_messages": { "type": "array", "description": "The messages the unfinished Session cannot take yet, in arrival order.", "items": { "$ref": "#/HeldMessage" } },
+      "correlation": { "type": ["string", "null"] },
+      "state": { "type": "string", "enum": ["open", "sealed"] },
+      "opened_at": { "type": "string", "format": "date-time" },
+      "last_active_at": { "type": "string", "format": "date-time" },
+      "sealed_at": { "type": ["string", "null"], "format": "date-time" },
+      "continues": { "type": ["string", "null"], "format": "uuid" },
+      "started_by": {
+        "type": ["string", "null"],
+        "description": "The Event a firing opened it for, or the Brief's author an operator opened it with. Null when neither names anyone."
+      },
+      "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+      "pull_requests": {
+        "type": "array",
+        "items": { "$ref": "#/PullRequestAvailability" },
+        "description": "One per repository fixed on the Workspace, in the checkout's order."
+      },
+      "unfinished_session": {
+        "anyOf": [{ "$ref": "#/UnfinishedSession" }, { "type": "null" }],
+        "description": "The one Session the Workspace has not let go of, while it has one."
+      }
+    },
+    "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "held_messages", "pull_requests", "unfinished_session"]
+  },
+  "WorkspaceListed": {
+    "allOf": [
+      { "$ref": "#/Workspace" },
+      {
+        "type": "object",
+        "properties": {
+          "session": {
+            "anyOf": [{ "$ref": "sessions.json#/Session" }, { "type": "null" }],
+            "description": "The Workspace's latest Session, as the Session read answers it; null before it has one."
+          },
+          "queue": {
+            "anyOf": [{ "$ref": "queue.json#/QueueStanding" }, { "type": "null" }],
+            "description": "Where that Session stands in the Organization's queue; null when it is in none of the queue's lists."
+          }
+        },
+        "required": ["session", "queue"]
+      }
+    ]
+  },
+  "UnfinishedSession": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid" },
+      "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+      "state": { "type": "string", "enum": ["queued", "working", "trailing", "waiting", "unbriefed", "ended", "unreachable"], "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet." },
+      "preparing": {
+        "type": ["string", "null"],
+        "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null]
+      }
+    },
+    "required": ["id", "name", "state", "preparing"]
+  },
+  "PullRequestAvailability": {
+    "type": "object",
+    "properties": {
+      "repository": { "type": "string" },
+      "availability": {
+        "type": "string",
+        "enum": ["available", "unavailable"],
+        "description": "Unavailable when no inbound GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
+      },
+      "known": {
+        "type": ["array", "null"],
+        "items": { "$ref": "#/PullRequest" },
+        "description": "The pull requests learned from the declared branch in this repository; null when unavailable."
+      }
+    },
+    "required": ["repository", "availability", "known"]
+  },
+  "PullRequest": {
+    "type": "object",
+    "description": "A Workspace's current value for one pull request, learned from a verified GitHub Event.",
+    "properties": {
+      "repository": { "type": "string", "description": "The head repository fixed on the Workspace." },
+      "number": { "type": "integer", "minimum": 1 },
+      "url": { "type": "string" },
+      "title": { "type": "string" },
+      "state": { "$ref": "#/PullRequestState" },
+      "head_branch": { "type": "string" },
+      "head_revision": { "type": "string" },
+      "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event or a read back of the pull request said." },
+      "event": { "type": "string", "format": "uuid", "description": "The Event the value was learned from." }
+    },
+    "required": ["repository", "number", "url", "title", "state", "head_branch", "head_revision", "updated_at", "event"]
+  },
+  "PullRequestState": { "type": "string", "enum": ["open", "closed", "merged"] },
+  "Checkout": {
+    "type": "object",
+    "properties": {
+      "repositories": { "type": "array", "items": { "type": "string" } },
+      "base": { "type": "string" },
+      "branch": { "type": "string" }
+    },
+    "required": ["repositories", "base", "branch"]
+  }
+}
