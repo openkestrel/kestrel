@@ -12276,6 +12276,9 @@ pub struct Activity {
     pub latest: Option<ActivityLatest>,
     ///Earliest start among omitted unexpired entries.
     pub started_at: Option<String>,
+    ///Distinct tool kinds among omitted unexpired calls, in first-occurrence order.
+    ///Constraint: uniqueItems=true
+    pub tool_kinds: Vec<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ActivityLatest {

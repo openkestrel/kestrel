@@ -8067,6 +8067,14 @@
             "type": "integer",
             "minimum": 1
           },
+          "tool_kinds": {
+            "type": "array",
+            "description": "Distinct tool kinds among omitted unexpired calls, in first-occurrence order.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
           "counts": {
             "type": "object",
             "properties": {
@@ -8155,6 +8163,7 @@
         "required": [
           "first_seq",
           "last_seq",
+          "tool_kinds",
           "counts",
           "latest",
           "started_at",

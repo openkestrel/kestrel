@@ -7667,6 +7667,39 @@ async fn retention_stream(kestrel: &Kestrel, workspace: &str, query: &str) -> St
 }
 
 #[tokio::test]
+async fn activity_summaries_carry_distinct_tool_kinds_without_expansion() {
+    let kestrel = Kestrel::stepped().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let completion = json!({"started_at":"2026-10-01T00:00:00Z", "finished_at":"2026-10-01T00:01:00Z", "turn_outcome":null});
+    for (seq, kind) in ["read", "execute", "read", "custom"]
+        .into_iter()
+        .enumerate()
+    {
+        let report = json!({"session":session.id,"seq":seq + 1,"kind":"tool_call","call_id":format!("call-{seq}"),"title":"work","tool_kind":kind,"status":"completed","input":{},"result":{},"closing_reason":null,"completion":completion});
+        assert_eq!(
+            link.report_body(&on.instance, Some(&on.credential), &report)
+                .await
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
+    let stream = retention_stream(&kestrel, &workspace, "").await;
+    let activity: Value = stream
+        .split("event: activity\n")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .unwrap();
+    assert_eq!(activity["tool_kinds"], json!(["read", "execute", "custom"]));
+    assert_eq!(activity["counts"]["tool_calls"], 4);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_shared_state() {
     let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;

@@ -301,6 +301,7 @@ fn recorded(entry: log::StoredTranscriptEntry) -> serde_json::Result<wire::Recor
 fn activity(activity: log::Activity) -> wire::Activity {
     let count = |count: u64| -> i64 { count.try_into().expect("a count fits a wire integer") };
     wire::Activity {
+        tool_kinds: activity.tool_kinds,
         first_seq: activity.first_seq,
         last_seq: activity.last_seq,
         counts: wire::ActivityCounts {

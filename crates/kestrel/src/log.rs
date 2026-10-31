@@ -616,6 +616,7 @@ impl<'a> Log<'a> {
                 "SELECT seq, kind, json_extract(body, '$.type') AS type,
                         json_extract(body, '$.title') AS title, json_extract(body, '$.status') AS status,
                         json_extract(body, '$.closing_reason') AS closing_reason,
+                        json_extract(body, '$.tool_kind') AS tool_kind,
                         json_extract(body, '$.completion.started_at') AS started_at,
                         json_extract(body, '$.completion.finished_at') AS finished_at
                  FROM transcript_entry WHERE workspace_id = ? AND seq > ? AND seq <= ? ORDER BY seq",
@@ -648,6 +649,10 @@ impl<'a> Log<'a> {
                     "plan" => summary.counts.plans += 1,
                     "tool_call" => {
                         summary.counts.tool_calls += 1;
+                        let tool_kind: String = row.get("tool_kind");
+                        if !summary.tool_kinds.contains(&tool_kind) {
+                            summary.tool_kinds.push(tool_kind);
+                        }
                         let status: ToolStatus =
                             serde_json::from_value(serde_json::Value::String(row.get("status")))
                                 .map_err(anyhow::Error::from)?;
@@ -1227,6 +1232,7 @@ pub struct Activity {
     pub first_seq: i64,
     pub last_seq: i64,
     pub counts: ActivityCounts,
+    pub tool_kinds: Vec<String>,
     pub latest: Option<ActivityItem>,
     pub started_at: Option<Timestamp>,
     pub finished_at: Option<Timestamp>,
@@ -1239,6 +1245,7 @@ impl Activity {
             first_seq: seq,
             last_seq: seq,
             counts: ActivityCounts::default(),
+            tool_kinds: Vec::new(),
             latest: None,
             started_at: None,
             finished_at: None,

@@ -42,18 +42,24 @@ type Recorded<Type extends Entry["type"]> = Extract<Entry, { type: Type }>;
 
 const ICON = "size-3.5 shrink-0";
 
-function KindIcon({ kind }: { kind: string }) {
+export function KindIcon({ kind, label }: { kind: string; label?: string }) {
+	const props = {
+		"aria-hidden": label === undefined ? true : undefined,
+		role: label === undefined ? undefined : "img",
+		"aria-label": label,
+		className: ICON,
+	};
 	switch (kind) {
 		case "read":
-			return <FileTextIcon aria-hidden className={ICON} />;
+			return <FileTextIcon {...props} />;
 		case "edit":
-			return <PencilIcon aria-hidden className={ICON} />;
+			return <PencilIcon {...props} />;
 		case "search":
-			return <SearchIcon aria-hidden className={ICON} />;
+			return <SearchIcon {...props} />;
 		case "execute":
-			return <SquareTerminalIcon aria-hidden className={ICON} />;
+			return <SquareTerminalIcon {...props} />;
 		default:
-			return <WrenchIcon aria-hidden className={ICON} />;
+			return <WrenchIcon {...props} />;
 	}
 }
 

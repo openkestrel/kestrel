@@ -65,6 +65,7 @@ function summary(
 			first_seq: first,
 			last_seq: last,
 			counts: { tool_calls: 0, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+			tool_kinds: [],
 			latest: null,
 			started_at: null,
 			finished_at: null,
@@ -233,6 +234,7 @@ test("a late joiner reads one line per Activity and expands only the one it open
 				entry(workspace, 1, { type: "participant_joined", participant: "builder" }),
 				summary(workspace, 2, 251, {
 					counts: { tool_calls: 250, failed_calls: 1, thoughts: 20, plans: 5, tombstones: 2 },
+					tool_kinds: ["read", "edit", "search", "execute", "fetch", "other"],
 					latest: { kind: "detail", title: "cargo test", status: "completed" },
 					started_at: "2026-09-30T10:00:00Z",
 					finished_at: "2026-09-30T10:05:00Z",
@@ -265,6 +267,11 @@ test("a late joiner reads one line per Activity and expands only the one it open
 	await expect(
 		log.getByRole("article", { name: "jack" }).filter({ hasText: "later" }),
 	).toBeVisible();
+	await Promise.all(
+		["read", "edit", "search", "execute", "fetch", "other"].map((kind) =>
+			expect(first.getByRole("img", { name: `${kind} tools`, exact: true })).toHaveCount(1),
+		),
+	);
 	expect(scripted.ranges).toEqual([]);
 
 	await first.focus();
@@ -343,6 +350,12 @@ test("a running call is a row with nothing to open, and its completed call repla
 	await expect(rows).toContainText("running");
 	await expect(rows.getByRole("button")).toHaveCount(0);
 	expect(scripted.ranges).toEqual([]);
+	const activity = log.getByRole("button", { name: "Activity, Working", exact: true });
+	await activity.click();
+	await expect(activity).toHaveAttribute("aria-expanded", "false");
+	await expect(activity.getByRole("img", { name: "execute tools", exact: true })).toBeVisible();
+	expect(scripted.ranges).toEqual([]);
+	await activity.click();
 	const running = await rows.elementHandle();
 
 	held.resolve();
@@ -364,6 +377,39 @@ test("a running call is a row with nothing to open, and its completed call repla
 	await expect(call).toHaveAttribute("aria-expanded", "true");
 	await expect(call).toBeFocused();
 	await expect(rows.getByRole("region", { name: "Output" })).toContainText("test result: ok");
+});
+
+test("a folded live Activity combines recorded and running tool kinds once", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted({
+		follow: (attempt) =>
+			attempt === 1
+				? wire(
+						summary(workspace, 1, 1, { tool_kinds: ["read"], closed: false }),
+						working(
+							["read", "execute", "execute"].map((kind, index) => ({
+								call_id: `running-${index}`,
+								title: "work",
+								tool_kind: kind,
+								status: "in_progress",
+								started_at: "2026-09-30T10:00:00Z",
+							})),
+						),
+					)
+				: stillOpen(),
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+	const activity = page
+		.getByRole("log")
+		.getByRole("button", { name: "Activity, Working", exact: true });
+	await activity.click();
+	await expect(activity).toHaveAttribute("aria-expanded", "false");
+	await expect(activity.getByRole("img", { name: "read tools", exact: true })).toHaveCount(1);
+	await expect(activity.getByRole("img", { name: "execute tools", exact: true })).toHaveCount(1);
 });
 
 test("a failed, an interrupted and an unresolved call each say so, and a failure opens to its error", async ({

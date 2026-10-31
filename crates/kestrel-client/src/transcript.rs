@@ -365,7 +365,7 @@ mod tests {
         let data = serde_json::json!({
             "first_seq": first_seq, "last_seq": first_seq + 2, "closed": closed, "anomaly": true,
             "counts": { "tool_calls": 2, "failed_calls": 1, "thoughts": 0, "plans": 1, "tombstones": 0 },
-            "latest": null, "started_at": null, "finished_at": null
+            "tool_kinds": ["read", "execute"], "latest": null, "started_at": null, "finished_at": null
         });
         match wire::Event::from_sse("activity", &data.to_string()) {
             Some(Ok(wire::Event::Activity(activity))) => activity,

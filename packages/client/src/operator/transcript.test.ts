@@ -20,6 +20,7 @@ function summary(first: number, last: number, overrides: Record<string, unknown>
 	return JSON.stringify({
 		first_seq: first,
 		last_seq: last,
+		tool_kinds: [],
 		counts: { tool_calls: 0, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
 		latest: null,
 		started_at: null,

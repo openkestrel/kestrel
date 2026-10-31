@@ -1399,6 +1399,8 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
         .unwrap();
     let activities = page["activities"].as_array().unwrap();
     assert_eq!(activities.len(), 2);
+    assert_eq!(activities[0]["tool_kinds"], json!(["read"]));
+    assert_eq!(activities[1]["tool_kinds"], json!([]));
     assert_eq!(
         activities[0]["counts"],
         json!({"tool_calls":1,"failed_calls":1,"thoughts":1,"plans":1,"tombstones":0})
@@ -1476,6 +1478,7 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
         serde_json::Value::Null
     );
     assert_eq!(expired["activities"][0]["anomaly"], false);
+    assert_eq!(expired["activities"][0]["tool_kinds"], json!([]));
     assert_eq!(
         expired["activities"][0]["latest"]["title"],
         serde_json::Value::Null
@@ -1497,7 +1500,7 @@ async fn a_cli_cut_after_the_final_activity_id_does_not_print_its_replacement_tw
             let request = requests.fetch_add(1, Ordering::SeqCst);
             async move {
                 let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"units\":[],\"message_buffering\":false,\"thought_buffering\":false,\"observation\":{\"availability\":\"unavailable\",\"last\":null}}\n\n";
-                let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
+                let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"tool_kinds\":[],\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
                 let tail = if request == 0 { "" } else {
                     assert_eq!(headers["last-event-id"], "example:4");
                     "id: example:5\nevent: entry\ndata: {\"seq\":5,\"kind\":\"shared_state\",\"appended_at\":\"2026-09-29T12:00:00Z\",\"entry\":{\"type\":\"said\",\"participant\":\"builder\",\"message\":\"done\"}}\n\nevent: end\ndata: {\"because\":\"sealed\"}\n\n"
