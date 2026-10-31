@@ -43,6 +43,7 @@ pub struct Finished {
 #[derive(Clone, Default)]
 pub struct Invocation {
     input: Option<String>,
+    terminal_prompt: Option<String>,
     environment: Vec<(String, String)>,
     files: Vec<(PathBuf, String)>,
     clones: Vec<(String, PathBuf)>,
@@ -52,6 +53,11 @@ pub struct Invocation {
 impl Invocation {
     pub fn given(mut self, input: &str) -> Self {
         self.input = Some(input.to_owned());
+        self
+    }
+
+    pub fn after_prompt(mut self, prompt: &str) -> Self {
+        self.terminal_prompt = Some(prompt.to_owned());
         self
     }
 
@@ -371,10 +377,17 @@ pub fn ran_on_a_terminal_as(
     }
 
     let mut typing = controller.try_clone().expect("the controller should clone");
+    let (ready, waiting) = channel();
+    let prompt = invocation.terminal_prompt.map(|prompt| (prompt, ready));
+    let waits_for_prompt = prompt.is_some();
+    let said = thread::spawn(move || read_until_hangup(controller, prompt));
+    if waits_for_prompt && waiting.recv_timeout(PATIENCE).is_err() {
+        let _ = child.kill();
+        panic!("the Client did not prompt in time");
+    }
     typing
         .write_all(typed.as_bytes())
         .expect("the typing should reach the client");
-    let said = thread::spawn(move || read_until_hangup(controller));
     let status = child.wait().expect("the client should be waited on");
 
     Shown {
@@ -442,14 +455,26 @@ fn a_terminal(columns: u16) -> (File, File) {
 
 /// The last device closing reads as an error on Linux and as an end on macOS, and both of
 /// them are the Client having exited.
-fn read_until_hangup(mut controller: File) -> String {
+fn read_until_hangup(
+    mut controller: File,
+    mut prompt: Option<(String, std::sync::mpsc::Sender<()>)>,
+) -> String {
     let mut said = Vec::new();
     let mut buffer = [0; 4096];
 
     loop {
         match controller.read(&mut buffer) {
             Ok(0) | Err(_) => break,
-            Ok(read) => said.extend_from_slice(&buffer[..read]),
+            Ok(read) => {
+                said.extend_from_slice(&buffer[..read]);
+                if prompt
+                    .as_ref()
+                    .is_some_and(|(text, _)| String::from_utf8_lossy(&said).contains(text))
+                {
+                    let (_, ready) = prompt.take().expect("the prompt was found");
+                    let _ = ready.send(());
+                }
+            }
         }
     }
 

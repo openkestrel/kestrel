@@ -286,6 +286,20 @@ fn fallback(
     })
 }
 
+pub fn after_save(error: anyhow::Error, saved: &str) -> anyhow::Error {
+    let Some(mut diagnostic) = error
+        .downcast_ref::<Failed>()
+        .and_then(Failed::diagnostic)
+        .cloned()
+    else {
+        return error.context(saved.to_owned());
+    };
+    each_kind!(&mut diagnostic, d => {
+        d.message = format!("{saved}. {}", d.message);
+    });
+    anyhow::anyhow!(Failed::diagnosed(Exit::of(&error), diagnostic))
+}
+
 /// The exit is the original failure's, whatever a step chosen afterwards does.
 pub fn report(error: &anyhow::Error, invocation: &Invocation) -> Exit {
     let exit = Exit::of(error);
