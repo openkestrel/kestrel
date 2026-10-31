@@ -98,6 +98,8 @@ struct Hub {
 struct State {
     senders: HashMap<OrganizationId, broadcast::Sender<Resource>>,
     pending: HashMap<(OrganizationId, Resource), Instant>,
+    /// Every resource a write touched, which coalescing would otherwise hide behind one entry.
+    raised: usize,
 }
 
 impl Notices {
@@ -108,6 +110,18 @@ impl Notices {
                 ..Hub::default()
             }),
         }
+    }
+
+    /// Raises counted where their write commits, so a test can tell a step that raised nothing from
+    /// one whose notice has not arrived yet.
+    pub fn raised(&self) -> usize {
+        self.hub.state.lock().unwrap().raised
+    }
+
+    /// Raises not yet handed to subscribers, so a test can wait until a stream it opens next hears
+    /// only what it writes after it.
+    pub fn undelivered(&self) -> usize {
+        self.hub.state.lock().unwrap().pending.len()
     }
 
     pub fn subscribe(&self, organization: OrganizationId) -> Subscription {
@@ -134,6 +148,7 @@ impl Notices {
             let mut state = self.hub.state.lock().unwrap();
             for (organization, resource) in touched.resources {
                 state.pending.entry((organization, resource)).or_insert(at);
+                state.raised += 1;
             }
             if touched.queues_everywhere {
                 for organization in state.senders.keys().copied().collect::<Vec<_>>() {
@@ -141,6 +156,7 @@ impl Notices {
                         .pending
                         .entry((organization, Resource::Queue))
                         .or_insert(at);
+                    state.raised += 1;
                 }
             }
             !self.hub.flushing.swap(true, Ordering::SeqCst)
@@ -233,6 +249,37 @@ mod tests {
             (1..=2).contains(&session_notices),
             "twenty changes became {session_notices} notices"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_publish_raises_a_notice_for_each_resource_it_touched() {
+        let (notices, organization, _subscription) = notices();
+        let session = SessionId::generate();
+        let mut touched = Touched::default();
+        touched.session_id(organization, session);
+        touched.workspace_id(organization, WorkspaceId::generate());
+
+        notices.publish(touched);
+        assert_eq!(notices.raised(), 2);
+
+        let mut again = Touched::default();
+        again.session_id(organization, session);
+        notices.publish(again);
+        assert_eq!(notices.raised(), 3, "coalescing hid a second raise");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_raise_stays_undelivered_until_its_coalescing_window_closes() {
+        let (notices, organization, mut subscription) = notices();
+        let mut touched = Touched::default();
+        touched.session_id(organization, SessionId::generate());
+
+        notices.publish(touched);
+        assert_eq!(notices.undelivered(), 1);
+        tokio::time::sleep(COALESCE * 2).await;
+
+        assert_eq!(notices.undelivered(), 0);
+        assert!(subscription.recv().await.is_some());
     }
 
     #[tokio::test(start_paused = true)]
