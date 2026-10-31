@@ -66,7 +66,7 @@ use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
 use kestrel::profile::{self as kestrel_profile, Contents};
 use kestrel::provider::{self, Held};
-use kestrel::role::serve::{self, Listen};
+use kestrel::role::serve::{self, Listen, Listeners};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::scheduling;
 use kestrel::sign_in::check::Providers;
@@ -212,6 +212,7 @@ pub struct Kestrel {
     cleanup: Cleanup,
     data_dir: TempDir,
     store: Store,
+    listeners: Listeners,
     bound: Listen,
     environment: Option<Provisions>,
     shutdown: CancellationToken,
@@ -268,6 +269,53 @@ impl Drop for Cleanup {
                 .as_ref()
                 .map(|environment| environment.driver.clone()),
         );
+    }
+}
+
+/// While nothing serves, these sockets accept and drop each dialler, so the link reads as gone
+/// rather than hanging and the ports stay out of another process's reach.
+struct Refusing {
+    stop: CancellationToken,
+    running: JoinHandle<()>,
+}
+
+impl Refusing {
+    fn on(listeners: &Listeners) -> Self {
+        let (link, operator) = listeners
+            .serving()
+            .expect("the control plane should hold its sockets");
+        let stop = CancellationToken::new();
+        let cancelled = stop.clone();
+        let running = tokio::spawn(async move {
+            tokio::select! {
+                () = cancelled.cancelled() => {}
+                () = refuse(link) => {}
+                () = refuse(operator) => {}
+            }
+        });
+
+        Self { stop, running }
+    }
+
+    async fn stop(mut self) {
+        self.stop.cancel();
+        let _ = (&mut self.running).await;
+    }
+}
+
+impl Drop for Refusing {
+    fn drop(&mut self) {
+        self.running.abort();
+    }
+}
+
+async fn refuse(listener: tokio::net::TcpListener) {
+    loop {
+        let Ok((dialled, _)) = listener.accept().await else {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        };
+        drop(dialled);
     }
 }
 
@@ -369,12 +417,13 @@ pub struct Consideration {
     pub candidates: Vec<(WorkspaceId, String)>,
 }
 
-/// Comes back on the address it was listening on, so what an Environment already dialled
-/// still reaches it.
+/// Comes back on the sockets it was listening on, so neither address is free for another process
+/// to take while it is away.
 pub struct Stopped {
     cleanup: Cleanup,
     data_dir: TempDir,
-    bound: Listen,
+    listeners: Listeners,
+    refusing: Refusing,
     environment: Option<Provisions>,
     follow_lease: Duration,
     pace: Pace,
@@ -661,6 +710,29 @@ impl Kestrel {
         .await
     }
 
+    /// Boots on sockets a previous boot already held, so the address never went back to the pool.
+    async fn boot_on(
+        data_dir: TempDir,
+        listeners: Listeners,
+        environment: Option<Provisions>,
+        follow_lease: Duration,
+        pace: Pace,
+        clock: Clock,
+    ) -> Self {
+        Self::boot_checking_on(
+            data_dir,
+            listeners,
+            environment,
+            follow_lease,
+            no_provider(),
+            client_url(),
+            Images::default(),
+            pace,
+            clock,
+        )
+        .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "every way a test varies the control plane it boots"
@@ -676,15 +748,52 @@ impl Kestrel {
         pace: Pace,
         clock: Clock,
     ) -> Self {
+        let listeners = Listeners::bind(listen).expect("the control plane should bind its link");
+        Self::boot_checking_on(
+            data_dir,
+            listeners,
+            environment,
+            follow_lease,
+            providers,
+            client,
+            images,
+            pace,
+            clock,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every way a test varies the control plane it boots"
+    )]
+    async fn boot_checking_on(
+        data_dir: TempDir,
+        listeners: Listeners,
+        environment: Option<Provisions>,
+        follow_lease: Duration,
+        providers: Providers,
+        client: url::Url,
+        images: Images,
+        pace: Pace,
+        clock: Clock,
+    ) -> Self {
         let store = Store::open_on(data_dir.path(), clock.clone())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let all_in_one = kestrel::role::bind(store.clone(), listen, client, follow_lease)
-            .await
-            .expect("the control plane should bind its link")
-            .checking_sign_ins_with(providers)
-            .inspecting(images);
+        let all_in_one = kestrel::role::bind_on(
+            store.clone(),
+            listeners
+                .try_clone()
+                .expect("the control plane should bind its link"),
+            client,
+            follow_lease,
+        )
+        .await
+        .expect("the control plane should bind its link")
+        .checking_sign_ins_with(providers)
+        .inspecting(images);
         let bound = all_in_one.bound();
         let address = bound.link;
         let dispatch = environment.clone().map(|provisions| Dispatch {
@@ -718,6 +827,7 @@ impl Kestrel {
         Self::running(
             data_dir,
             store,
+            listeners,
             bound,
             environment,
             shutdown,
@@ -744,17 +854,20 @@ impl Kestrel {
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let listening = serve::bind(
+        let listeners = Listeners::bind(Listen {
+            link: LOOPBACK,
+            operator: LOOPBACK,
+        })
+        .expect("the control plane should bind its link");
+        let listening = serve::Listening::on(
             store.clone(),
-            Listen {
-                link: LOOPBACK,
-                operator: LOOPBACK,
-            },
+            listeners
+                .try_clone()
+                .expect("the control plane should bind its link"),
             client_url(),
             Wake::default(),
             kestrel::presence::LEASE,
         )
-        .await
         .expect("the control plane should bind its link")
         .checking_sign_ins_with(no_provider())
         .creating_github_apps_at(api)
@@ -765,6 +878,7 @@ impl Kestrel {
         Self::running(
             data_dir,
             store,
+            listeners,
             bound,
             None,
             shutdown,
@@ -781,6 +895,7 @@ impl Kestrel {
     fn running(
         data_dir: TempDir,
         store: Store,
+        listeners: Listeners,
         bound: Listen,
         environment: Option<Provisions>,
         shutdown: CancellationToken,
@@ -800,6 +915,7 @@ impl Kestrel {
             cleanup,
             data_dir,
             store,
+            listeners,
             bound,
             environment,
             shutdown,
@@ -885,6 +1001,10 @@ impl Kestrel {
 
     pub fn operator_port(&self) -> u16 {
         self.bound.operator.port()
+    }
+
+    pub fn link_port(&self) -> u16 {
+        self.bound.link.port()
     }
 
     pub fn link_from_an_environment(&self) -> String {
@@ -2659,11 +2779,13 @@ impl Kestrel {
         }
         let clock = self.store.clock().clone();
         drop(self.store);
+        let refusing = Refusing::on(&self.listeners);
 
         Stopped {
             cleanup: self.cleanup,
             data_dir: self.data_dir,
-            bound: self.bound,
+            listeners: self.listeners,
+            refusing,
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
@@ -2697,11 +2819,13 @@ impl Kestrel {
         self.cleanup.armed = false;
         let clock = self.store.clock().clone();
         drop(self.store);
+        let refusing = Refusing::on(&self.listeners);
 
         Stopped {
             cleanup: self.cleanup,
             data_dir: self.data_dir,
-            bound: self.bound,
+            listeners: self.listeners,
+            refusing,
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
@@ -2761,9 +2885,10 @@ impl Stopped {
 
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_paced(
+        self.refusing.stop().await;
+        Kestrel::boot_on(
             self.data_dir,
-            self.bound,
+            self.listeners,
             self.environment,
             self.follow_lease,
             self.pace,
@@ -2781,9 +2906,10 @@ impl Stopped {
         maximum: usize,
     ) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_paced(
+        self.refusing.stop().await;
+        Kestrel::boot_on(
             self.data_dir,
-            self.bound,
+            self.listeners,
             Some(Provisions {
                 driver: Driver::LocalExec(LocalExec::running(supervisor)),
                 harnesses: vec![HarnessCommand {

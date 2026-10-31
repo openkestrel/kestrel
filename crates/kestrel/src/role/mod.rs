@@ -27,11 +27,22 @@ pub async fn bind(
     client: Url,
     follow_lease: Duration,
 ) -> Result<AllInOne> {
+    bind_on(store, serve::Listeners::bind(listen)?, client, follow_lease).await
+}
+
+/// Binds on sockets the caller already holds, so a restarted control plane comes back on the
+/// address everything already reached it at.
+pub async fn bind_on(
+    store: Store,
+    listeners: serve::Listeners,
+    client: Url,
+    follow_lease: Duration,
+) -> Result<AllInOne> {
     let wake = Wake::default();
 
     Ok(AllInOne {
         store: store.clone(),
-        listening: serve::bind(store, listen, client, wake.clone(), follow_lease).await?,
+        listening: serve::Listening::on(store, listeners, client, wake.clone(), follow_lease)?,
         wake,
     })
 }

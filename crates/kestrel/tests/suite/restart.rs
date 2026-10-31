@@ -419,3 +419,22 @@ async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_super
     forgetful.destroy();
     kestrel.teardown().await;
 }
+
+/// A port the control plane let go of between boots would be free for another process to take,
+/// which is how a restarted control plane came to fail at binding its link.
+#[tokio::test]
+async fn a_restart_keeps_its_address_out_of_another_holders_reach() {
+    let kestrel = Kestrel::boot().await;
+    let address = kestrel.link();
+    let port = kestrel.link_port();
+    let stopped = kestrel.kill().await;
+
+    assert!(
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_err(),
+        "another holder took the link's port while the control plane was away"
+    );
+
+    let kestrel = stopped.restart().await;
+    assert_eq!(kestrel.link(), address);
+    kestrel.teardown().await;
+}
