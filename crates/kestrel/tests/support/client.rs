@@ -46,7 +46,7 @@ pub struct Invocation {
     terminal_prompt: Option<String>,
     environment: Vec<(String, String)>,
     files: Vec<(PathBuf, String)>,
-    clones: Vec<(String, PathBuf)>,
+    clones: Vec<(String, PathBuf, Option<String>)>,
     within: PathBuf,
 }
 
@@ -76,11 +76,20 @@ impl Invocation {
     /// PATH it needs to read the clone the way an operator's shell would.
     pub fn cloned(mut self, repository: &str, directory: &str) -> Self {
         self.clones
-            .push((repository.to_owned(), PathBuf::from(directory)));
+            .push((repository.to_owned(), PathBuf::from(directory), None));
         self.env(
             "PATH",
             &std::env::var("PATH").expect("a PATH to find git on"),
         )
+    }
+
+    /// As `cloned`, then with `origin` pointed at another address naming the same repository.
+    pub fn cloned_with_origin(self, repository: &str, directory: &str, origin: &str) -> Self {
+        let mut cloned = self.cloned(repository, directory);
+        if let Some(clone) = cloned.clones.last_mut() {
+            clone.2 = Some(origin.to_owned());
+        }
+        cloned
     }
 
     /// Runs from this directory inside the home rather than the home itself.
@@ -98,7 +107,7 @@ impl Invocation {
             }
             std::fs::write(&path, contents).expect("the file should write");
         }
-        for (repository, directory) in &self.clones {
+        for (repository, directory, origin) in &self.clones {
             let cloned = super::git::command()
                 .arg("clone")
                 .arg("--quiet")
@@ -111,6 +120,18 @@ impl Invocation {
                 "cloning {repository} failed:\n{}",
                 String::from_utf8_lossy(&cloned.stderr)
             );
+            if let Some(origin) = origin {
+                let pointed = super::git::command()
+                    .arg("-C")
+                    .arg(home.path().join(directory))
+                    .args(["remote", "set-url", "origin", origin])
+                    .output()
+                    .expect("git should be reachable");
+                assert!(
+                    pointed.status.success(),
+                    "pointing origin at {origin} failed"
+                );
+            }
         }
         let working = home.path().join(&self.within);
         std::fs::create_dir_all(&working).expect("the working directory should create");
@@ -122,7 +143,7 @@ impl Invocation {
         self.files
             .iter()
             .map(|(path, _)| path)
-            .chain(self.clones.iter().map(|(_, directory)| directory))
+            .chain(self.clones.iter().map(|(_, directory, _)| directory))
             .chain([&self.within])
             .any(|path| path.components().next() == Some(Component::Normal(entry.as_os_str())))
     }

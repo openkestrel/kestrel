@@ -381,6 +381,86 @@ async fn github_shorthand_finds_the_project_declared_against_its_address() {
 }
 
 #[tokio::test]
+async fn a_clone_by_another_transport_finds_the_project_and_starts_against_its_declared_address() {
+    let kestrel = Kestrel::boot().await;
+    let acme = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &acme,
+            "storefront",
+            &["https://github.com/acme/widgets.git".to_owned()],
+            repository::BRANCH,
+        )
+        .await;
+
+    let started = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF, "--credential", PROVIDER_KEY],
+        Invocation::default()
+            .cloned_with_origin(
+                repository::url(),
+                repository::NAME,
+                "git@github.com:Acme/widgets",
+            )
+            .within(repository::NAME)
+            .env(PROVIDER_KEY, A_PROVIDER_KEY),
+    )
+    .await;
+
+    assert!(started.status.success(), "{}", started.err);
+    let explained = resolved(&started.err);
+    assert!(
+        explained
+            .iter()
+            .any(|row| row.contains("project") && row.ends_with("storefront")),
+        "{explained:?}"
+    );
+    assert_eq!(kestrel.projects(&acme).await.len(), 1);
+    let workspaces = kestrel.workspaces("acme").await;
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(
+        workspaces[0].checkout.repositories,
+        ["https://github.com/acme/widgets.git"]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_clone_two_projects_begin_with_infers_neither_and_names_both() {
+    let kestrel = Kestrel::boot().await;
+    let acme = kestrel.declare_organization("acme").await;
+    for name in ["storefront", "storefront-next"] {
+        kestrel
+            .declare_project(
+                &acme,
+                name,
+                &["https://github.com/acme/widgets.git".to_owned()],
+                repository::BRANCH,
+            )
+            .await;
+    }
+
+    let refused = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF],
+        Invocation::default()
+            .cloned_with_origin(
+                repository::url(),
+                repository::NAME,
+                "https://github.com/acme/widgets",
+            )
+            .within(repository::NAME),
+    )
+    .await;
+
+    refused_naming(&refused, &["--project", "storefront", "storefront-next"]);
+    assert!(kestrel.workspaces("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_repository_no_declaration_could_hold_is_refused_before_anything_is_sent() {
     let kestrel = Kestrel::boot().await;
     let acme = kestrel.declare_organization("acme").await;

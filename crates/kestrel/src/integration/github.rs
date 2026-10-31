@@ -15,6 +15,7 @@ use crate::declined::Declined;
 use crate::domain::{GithubConnection, Integration, IntegrationId, Occurrence};
 use crate::integration::credential::App;
 use crate::readiness::{Delegation, Readiness, WorkState};
+use crate::repository::Identity;
 use crate::store::Store;
 use crate::timer::Clock;
 
@@ -1541,7 +1542,7 @@ pub fn https_address(repository: &str) -> String {
 }
 
 pub fn names(url: &str, repository: &str) -> bool {
-    named_repository(url).is_some_and(|named| named.eq_ignore_ascii_case(repository))
+    Identity::same(url, &https_address(repository))
 }
 
 /// The `owner/name` a github.com URL names, in any of the forms git clones it by.

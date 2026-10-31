@@ -6,9 +6,10 @@ use crate::declined::{Again, Constraint, Next, Reason, Resource, Step};
 use crate::domain::{
     Connection, Direction, GithubConnection, Integration, SelectedIntegration, Session, Workspace,
 };
+use crate::repository::Identity;
 use crate::store::Store;
 
-use super::github::{self, Github, Installed, Minted, Refused, Unproven};
+use super::github::{Github, Installed, Minted, Refused, Unproven};
 use super::{integration, out_of_use};
 
 /// What lends a repository its authority: an enabled GitHub App that carries outbound, which is
@@ -193,22 +194,7 @@ fn selected<'a>(
 
 /// Only over HTTPS, so a token is never handed to a request that would send it in the clear.
 pub(super) fn same_repository(selected: &str, asked: &str) -> bool {
-    if !asked.starts_with("https://") {
-        return false;
-    }
-    match (
-        github::named_repository(selected),
-        github::named_repository(asked),
-    ) {
-        (Some(selected), Some(asked)) => selected.eq_ignore_ascii_case(&asked),
-        _ => {
-            let bare = |url: &str| {
-                let url = url.trim_end_matches('/');
-                url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
-            };
-            bare(selected) == bare(asked)
-        }
-    }
+    asked.starts_with("https://") && Identity::same(selected, asked)
 }
 
 pub struct Reached {

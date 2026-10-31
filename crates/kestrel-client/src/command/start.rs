@@ -87,7 +87,7 @@ async fn started(
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
-    let existing = start::Existing::read(declared, projects, agents, credentials);
+    let mut existing = start::Existing::read(declared, projects, agents, credentials);
     let names_a_project = start.project.as_ref().is_some_and(|name| {
         existing
             .projects
@@ -98,6 +98,15 @@ async fn started(
     if !start.repositories.is_empty() {
         start.repositories = resolved(api, start.repositories).await?;
     } else if !names_a_project && let Some(origin) = clone.origin.take() {
+        if declared {
+            let declaring: wire::ListProjectsResponse = api
+                .get_where_as(
+                    &["organizations", &organization.value, "projects"],
+                    &[("repository", &origin)],
+                )
+                .await?;
+            existing.declaring = Some(declaring.into_iter().map(|record| record.name).collect());
+        }
         clone.origin = resolved(api, vec![origin]).await?.pop();
     }
 

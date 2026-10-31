@@ -1694,15 +1694,34 @@ async fn declare_organization(
     Ok(answered::<_, wire::Organization>(declared))
 }
 
+#[derive(Deserialize)]
+struct ProjectsQuery {
+    repository: Option<String>,
+}
+
 async fn projects(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
+    Query(query): Query<ProjectsQuery>,
 ) -> Result<Json<wire::ListProjectsResponse>, Refused> {
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
     let projects = tx.projects().all(&organization).await?;
 
-    Ok(Json(projects.into_iter().map(Into::into).collect()))
+    Ok(Json(
+        projects
+            .into_iter()
+            .filter(|project| {
+                query.repository.as_deref().is_none_or(|repository| {
+                    project
+                        .repositories
+                        .first()
+                        .is_some_and(|first| repository::Identity::same(first, repository))
+                })
+            })
+            .map(Into::into)
+            .collect(),
+    ))
 }
 
 async fn declare_project(

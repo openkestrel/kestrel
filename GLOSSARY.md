@@ -265,6 +265,13 @@ once and reused by many workspaces; it is what a workspace's checkout is resolve
 checkout itself.
 _Avoid_: repository set, checkout, working tree
 
+**Repository**:
+What a project declares work against, named by an **address**: how an instance clones it, transport
+included, fixed when the project is declared. Two addresses name the same repository when they
+differ only in transport or spelling, so a clone's origin can match a declaration it was not
+written as.
+_Avoid_: remote, origin, URL
+
 **Environment**:
 The declaration of what a workspace's instance is provisioned from: its image, its size, and the
 setup layered over them. Named, declared once, and derivable from a repository's own
