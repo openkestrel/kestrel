@@ -100,7 +100,7 @@ fn an_ended_failure_keeps_its_kind_and_exit_and_names_the_test() {
         } else {
             "interrupted"
         };
-        let failed = failed("ada", test_in(state, outcome));
+        let failed = failure("ada", test_in(state, outcome));
         assert_eq!(failed.exit(), exit);
         let message = diagnostic::message(failed.diagnostic().expect("typed"));
         assert!(message.contains("t1"), "{message}");

@@ -7,6 +7,7 @@ use kestrel_operator_types as wire;
 use serde_json::json;
 
 use super::Running;
+use super::relay::transient;
 use crate::diagnostic;
 use crate::exit::{Exit, Failed};
 use crate::typed::{self, Column, Columns, or_absent, text};
@@ -78,7 +79,7 @@ pub(crate) async fn run(running: Running<'_>, command: SignInCommand) -> Result<
     if ended.outcome == Some(wire::SignInTestOutcome::Worked) {
         return typed::show(running.presentation, &TESTED, &ended);
     }
-    bail!(failed(&organization, ended))
+    bail!(failure(&organization, ended))
 }
 
 fn model_named(method: &wire::SignInMethod, model: Option<&str>) -> Result<(), String> {
@@ -128,7 +129,7 @@ where
                 unanswered = 0;
                 test = read;
             }
-            Err(error) if Exit::of(&error) == Exit::Unavailable && unanswered + 1 < PATIENCE => {
+            Err(error) if transient(&error) && unanswered + 1 < PATIENCE => {
                 unanswered += 1;
             }
             Err(error) => return Err(error),
@@ -136,7 +137,7 @@ where
     }
 }
 
-fn failed(organization: &str, test: wire::SignInTest) -> Failed {
+fn failure(organization: &str, test: wire::SignInTest) -> Failed {
     use wire::SignInTestOutcome as O;
     let ended = test.outcome.as_ref().map_or(test.state.as_str(), O::as_str);
     let message = format!(

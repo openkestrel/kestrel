@@ -175,3 +175,76 @@ async fn without_a_terminal_codex_prints_its_link_and_code_and_waits_for_approva
 
     kestrel.teardown().await;
 }
+
+/// A Codex login started without a terminal, once it has shown its code.
+async fn waiting_codex(kestrel: &Kestrel) -> Client {
+    let operator = kestrel.operator();
+    tokio::task::spawn_blocking(move || {
+        let client = Client::spawn(
+            &operator,
+            &["login", "codex", "--method", "codex-device-auth"],
+        );
+        client.until_err_says(DEVICE_CODE);
+        client
+    })
+    .await
+    .expect("the relay waits for the browser")
+}
+
+#[tokio::test]
+async fn a_second_login_while_a_relay_runs_is_refused_with_its_steps_and_starts_nothing() {
+    let scripts = codex();
+    let kestrel = booted(&scripts).await;
+    let _first = waiting_codex(&kestrel).await;
+
+    let second = client::ran_by(
+        &kestrel,
+        &["login", "codex", "--method", "codex-device-auth"],
+        Invocation::default(),
+    )
+    .await;
+
+    assert_eq!(second.status.code(), Some(4), "{}", second.err);
+    assert!(
+        second.err.contains("continue the codex sign-in relay"),
+        "{}",
+        second.err
+    );
+    assert_eq!(kestrel.database().relays().await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_dropped_control_plane_is_read_again_and_its_relay_never_started_again() {
+    let scripts = codex();
+    let kestrel = booted(&scripts).await;
+    let mut client = waiting_codex(&kestrel).await;
+
+    let kestrel = kestrel.teardown().await.restart().await;
+    let finished = tokio::task::spawn_blocking(move || client.finish())
+        .await
+        .expect("the client finishes");
+
+    assert_eq!(finished.status.code(), Some(4), "{}", finished.err);
+    assert_eq!(
+        finished.err.matches("Signing in to codex").count(),
+        1,
+        "{}",
+        finished.err
+    );
+    assert_eq!(kestrel.database().relays().await.len(), 1);
+    let relay: Value = reqwest::get(format!(
+        "{}/operator/organizations/ada/sign-ins/codex/codex-device-auth/relay/{}",
+        kestrel.operator(),
+        kestrel.database().relays().await[0]
+    ))
+    .await
+    .expect("the relay reads")
+    .json()
+    .await
+    .expect("a relay");
+    assert_eq!(relay["progress"]["state"], "failed", "{relay}");
+
+    kestrel.teardown().await;
+}

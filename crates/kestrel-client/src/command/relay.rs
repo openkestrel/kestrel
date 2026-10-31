@@ -58,6 +58,7 @@ pub(super) async fn signed_in(
             .collect(),
         said: Vec::new(),
         version: i64::MIN,
+        reread: false,
     };
     following.until_done(relay).await
 }
@@ -67,15 +68,18 @@ struct Following<'a> {
     relay: Vec<String>,
     said: Vec<&'static str>,
     version: i64,
+    /// The answer to a write was lost, so the relay is read again rather than awaited.
+    reread: bool,
 }
 
+/// A stream that ends before the relay does, cleanly or not, is read again.
 enum Followed {
     Done(Box<wire::SavedSignIn>),
-    Dropped(Option<anyhow::Error>),
+    Unfinished(Option<anyhow::Error>),
 }
 
 /// Only a failure to hear an answer is worth reading again; a refusal is the relay's answer.
-fn transient(error: &anyhow::Error) -> bool {
+pub(super) fn transient(error: &anyhow::Error) -> bool {
     Exit::of(error) == Exit::Unavailable
 }
 
@@ -102,9 +106,10 @@ impl Following<'_> {
         }
         let mut unanswered = 0;
         loop {
+            self.reread = false;
             let mut lost = match self.followed().await? {
                 Followed::Done(saved) => return Ok(*saved),
-                Followed::Dropped(lost) => lost,
+                Followed::Unfinished(lost) => lost,
             };
             match self.api.get_as::<wire::SignInRelay>(&self.at(&[])).await {
                 Ok(relay) => {
@@ -134,15 +139,15 @@ impl Following<'_> {
     async fn followed(&mut self) -> Result<Followed> {
         let response = match self.api.get_response(&self.at(&["events"]), &[]).await {
             Ok(response) => response,
-            Err(error) if transient(&error) => return Ok(Followed::Dropped(Some(error))),
+            Err(error) if transient(&error) => return Ok(Followed::Unfinished(Some(error))),
             Err(error) => return Err(error),
         };
         let mut events = Events::over(response);
         loop {
             let event = match events.next().await {
                 Ok(Some(event)) => event,
-                Ok(None) => return Ok(Followed::Dropped(None)),
-                Err(error) => return Ok(Followed::Dropped(Some(anyhow!(error)))),
+                Ok(None) => return Ok(Followed::Unfinished(None)),
+                Err(error) => return Ok(Followed::Unfinished(Some(anyhow!(error)))),
             };
             let Some(decoded) = event
                 .name
@@ -156,8 +161,11 @@ impl Following<'_> {
                     if let Some(saved) = self.observed(relay).await? {
                         return Ok(Followed::Done(Box::new(saved)));
                     }
+                    if std::mem::take(&mut self.reread) {
+                        return Ok(Followed::Unfinished(None));
+                    }
                 }
-                wire::RelayEvent::RelayEnd(_) => return Ok(Followed::Dropped(None)),
+                wire::RelayEvent::RelayEnd(_) => return Ok(Followed::Unfinished(None)),
             }
         }
     }
@@ -167,10 +175,11 @@ impl Following<'_> {
         use wire::SignInRelayProgress as P;
         let mut relay = relay;
         loop {
-            if relay.version <= self.version {
+            let version = relay.version;
+            if version <= self.version {
                 return Ok(None);
             }
-            self.version = relay.version;
+            self.version = version;
             match relay.progress {
                 P::RelayStarting(_) => {
                     if self.first("starting") {
@@ -190,6 +199,15 @@ impl Following<'_> {
                 }
                 P::RelayAwaitingCode(waiting) => {
                     if self.first("awaiting_code") {
+                        if !interactive() {
+                            bail!(Failed::new(
+                                Exit::Usage,
+                                format!(
+                                    "the sign-in relay {} asks for a code, and nothing here can be asked; it waits until its deadline",
+                                    relay.id
+                                )
+                            ));
+                        }
                         eprintln!("Open this link in a browser, on any machine, and sign in:");
                         eprintln!("{}", waiting.url);
                         let code =
@@ -200,11 +218,25 @@ impl Following<'_> {
                                 "no code was given; the relay waits for one until its deadline"
                             ));
                         }
-                        relay = self
+                        match self
                             .api
                             .post_as(&self.at(&["code"]), &wire::SignInRelayCode { code })
-                            .await?;
-                        continue;
+                            .await
+                        {
+                            Ok(next) => {
+                                relay = next;
+                                continue;
+                            }
+                            Err(error) if transient(&error) => {
+                                eprintln!(
+                                    "The answer to the code was lost; reading the relay to see whether it arrived…"
+                                );
+                                self.said.retain(|state| *state != "awaiting_code");
+                                self.version = version - 1;
+                                self.reread = true;
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                 }
                 P::RelaySaving(_) => {
