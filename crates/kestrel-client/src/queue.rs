@@ -315,3 +315,6 @@ fn occupancy(
     }
     line
 }
+
+#[cfg(test)]
+mod tests;
