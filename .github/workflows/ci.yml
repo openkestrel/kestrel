@@ -279,9 +279,7 @@ jobs:
   # Each image is built once for the change and pushed tagged by the commit, so every job that
   # needs one pulls rather than builds it (ADR-0027). Layer caching is restored on every run from
   # each image's `buildcache` tag, which only Main's image-cache job writes (ADR-0027). The
-  # image inputs changed with the Rust sources, so these follow the `images` area. Each push goes
-  # through the retry helper, because a registry that refuses a blob transiently otherwise costs
-  # the batch (docs/agents/flakes.md).
+  # image inputs changed with the Rust sources, so these follow the `images` area.
   build-env:
     name: kestrel-env (build)
     needs: changes
@@ -293,26 +291,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: ./.github/actions/docker-hub-mirror
+      - uses: ./.github/actions/build-image
         with:
-          buildx: true
-
-      - uses: ./.github/actions/registry-login
-
-      - name: Build the image once for this change
-        env:
-          IMAGE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
-          CACHE: ghcr.io/${{ github.repository }}-env:buildcache
-        run: |
-          started=$(date +%s)
-          docker buildx build \
-            --file images/kestrel-env/Dockerfile \
-            --tag "${IMAGE}" \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --load .
-          .github/scripts/retry.sh docker push "${IMAGE}"
-          size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
-          echo "kestrel-env: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
+          image: kestrel-env
+          repository: ghcr.io/${{ github.repository }}-env
 
   build-control-plane:
     name: kestrel (build)
@@ -325,26 +307,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: ./.github/actions/docker-hub-mirror
+      - uses: ./.github/actions/build-image
         with:
-          buildx: true
-
-      - uses: ./.github/actions/registry-login
-
-      - name: Build the image once for this change
-        env:
-          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
-          CACHE: ghcr.io/${{ github.repository }}:buildcache
-        run: |
-          started=$(date +%s)
-          docker buildx build \
-            --file images/kestrel/Dockerfile \
-            --tag "${IMAGE}" \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --load .
-          .github/scripts/retry.sh docker push "${IMAGE}"
-          size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
-          echo "kestrel: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
+          image: kestrel
+          repository: ghcr.io/${{ github.repository }}
 
   build-client:
     name: kestrel-client (build)
@@ -357,26 +323,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: ./.github/actions/docker-hub-mirror
+      - uses: ./.github/actions/build-image
         with:
-          buildx: true
-
-      - uses: ./.github/actions/registry-login
-
-      - name: Build the image once for this change
-        env:
-          IMAGE: ghcr.io/${{ github.repository }}-client:${{ github.sha }}
-          CACHE: ghcr.io/${{ github.repository }}-client:buildcache
-        run: |
-          started=$(date +%s)
-          docker buildx build \
-            --file images/kestrel-client/Dockerfile \
-            --tag "${IMAGE}" \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --load .
-          .github/scripts/retry.sh docker push "${IMAGE}"
-          size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
-          echo "kestrel-client: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
+          image: kestrel-client
+          repository: ghcr.io/${{ github.repository }}-client
 
   # The heavy suites compile once, beside the image builds rather than after them, and every job
   # that runs one restores them through `.github/actions/suites`.

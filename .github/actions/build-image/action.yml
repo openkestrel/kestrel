@@ -1,0 +1,40 @@
+name: Build image
+description: >-
+  Builds one image from `images/<image>/Dockerfile` once for the change, restoring layers from the
+  repository's `buildcache` tag, and pushes it tagged by the commit through the retry helper,
+  because a registry that refuses a blob transiently otherwise costs the batch
+  (docs/agents/flakes.md).
+
+inputs:
+  image:
+    description: The directory under `images/` that holds the Dockerfile, and the name the summary reports.
+    required: true
+  repository:
+    description: The image's repository on ghcr.io, without a tag.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/docker-hub-mirror
+      with:
+        buildx: true
+
+    - uses: ./.github/actions/registry-login
+
+    - name: Build the image once for this change
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        REF: ${{ inputs.repository }}:${{ github.sha }}
+        CACHE: ${{ inputs.repository }}:buildcache
+      run: |
+        started=$(date +%s)
+        docker buildx build \
+          --file "images/${IMAGE}/Dockerfile" \
+          --tag "${REF}" \
+          --cache-from "type=registry,ref=${CACHE}" \
+          --load .
+        "${GITHUB_WORKSPACE}/.github/scripts/retry.sh" docker push "${REF}"
+        size=$(docker image inspect "${REF}" --format '{{.Size}}')
+        echo "${IMAGE}: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
