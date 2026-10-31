@@ -79,8 +79,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel/tests/compose.rs token-budget-exempt=835
 
-/crates/kestrel/tests/subscription.rs token-budget-exempt=856
-
 /crates/kestrel/tests/suite/acp.rs token-budget-exempt=810
 
 /crates/kestrel/tests/suite/authority.rs token-budget-exempt=814
