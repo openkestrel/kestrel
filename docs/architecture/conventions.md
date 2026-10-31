@@ -103,6 +103,10 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   nothing branches on the harness; `contention` measures load and `subscription` spends a
   person's model plan, so only a person runs them.
 - **The supervisor has its own suite** in `crates/kestrel-supervisor/tests/` against a stub link.
+- **The Client's fixture components run in Vitest browser mode.** `src/**/*.test.ts` runs in Node;
+  `component-tests/**/*.test.tsx` runs in headless Chromium in the same `bun run test`, because those
+  fixtures assert roles, focus, layout and axe against real CSS. CI installs the browser before the
+  Vitest step; there is no separate component-test command.
 - **Git in tests is hermetic** only if your global config is: run `cargo test` with
   `GIT_CONFIG_GLOBAL=/dev/null` when commit signing is configured.
 - **CI runs the default suite with `cargo nextest`**, one process per test. Plain `cargo test` runs

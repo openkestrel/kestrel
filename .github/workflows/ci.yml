@@ -267,14 +267,11 @@ jobs:
       - name: Lint
         run: bun run check
 
-      - name: Test the transport
-        run: bun run test
-
       - name: Install the browser
         run: bunx playwright install --with-deps chromium
 
-      - name: Test fixture components
-        run: bun run test:components
+      - name: Test
+        run: bun run test
 
       - name: Test the built Client against a control plane
         run: bun run e2e
