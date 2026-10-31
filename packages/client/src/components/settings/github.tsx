@@ -197,7 +197,9 @@ function Flow({ organization, flow }: { organization?: string; flow: string }) {
 				<p className="text-muted-foreground text-xs" data-flow-expiry>
 					{stage === "connected"
 						? `Connected the repository ${shown.repository ?? ""} as the Integration ${shown.integration ?? ""}.`
-						: `${expiresIn(shown.expires_at, now)}, at ${new Date(shown.expires_at).toLocaleTimeString()}. ${NEVER_REMOTE}`}
+						: stage === "ended"
+							? `${shown.phase === "expired" ? "Expired. " : ""}${NEVER_REMOTE}`
+							: `${expiresIn(shown.expires_at, now)}, at ${new Date(shown.expires_at).toLocaleTimeString()}. ${NEVER_REMOTE}`}
 				</p>
 			)}
 			{shown && stage === "installing" && (

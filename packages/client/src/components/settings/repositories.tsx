@@ -117,8 +117,8 @@ export function RepositoriesSettings({ organization }: { organization: string })
 												(selection) => selection.repository === repository,
 											);
 											return (
-												<li key={repository} className="break-all">
-													<span className="font-mono">{repository}</span>
+												<li key={repository}>
+													<span className="break-all font-mono">{repository}</span>
 													<span className="text-muted-foreground">
 														{selected
 															? ` · reaches GitHub as ${selected.integration}`

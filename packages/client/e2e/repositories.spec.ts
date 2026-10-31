@@ -320,6 +320,7 @@ test("an expired or cancelled setup offers a new one and never claims to remove 
 	const ended = page.locator('[data-flow-stage="ended"]');
 	await expect(ended).toContainText("This GitHub setup was cancelled.");
 	await expect(ended.locator("[data-connect-github]")).toBeVisible();
+	await expect(page.locator("[data-flow-expiry]")).not.toContainText("Expires in");
 
 	held.phase = "expired";
 	await page.route(`**/operator/github-app/flows/${FLOW}`, (route) =>
