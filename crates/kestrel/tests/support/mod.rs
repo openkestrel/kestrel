@@ -24,6 +24,7 @@ pub mod lineage;
 pub mod link_client;
 pub mod model;
 pub mod operator_log;
+pub mod profile;
 pub mod provider_stub;
 pub mod repository;
 pub mod scripted_agent;
@@ -62,7 +63,7 @@ use kestrel::integration::{self, Connecting, Registration};
 use kestrel::link::credential::Secret;
 use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
-use kestrel::profile::{self, Contents};
+use kestrel::profile::{self as kestrel_profile, Contents};
 use kestrel::provider::{self, Held};
 use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
@@ -1724,7 +1725,7 @@ impl Kestrel {
         name: &str,
         owner: &str,
     ) -> anyhow::Result<SubscriptionProfile> {
-        profile::declare(&self.store, organization, name, Some(owner))
+        kestrel_profile::declare(&self.store, organization, name, Some(owner))
             .await
             .map(|declared| declared.record)
     }
@@ -1733,10 +1734,10 @@ impl Kestrel {
         &self,
         organization: &str,
         name: &str,
-        entry: &profile::Entry,
+        entry: &kestrel_profile::Entry,
         login: &str,
     ) {
-        profile::hold(&self.store, organization, name, entry, login)
+        kestrel_profile::hold(&self.store, organization, name, entry, login)
             .await
             .expect("the login should be held");
     }
@@ -1744,8 +1745,8 @@ impl Kestrel {
     pub async fn profiles(
         &self,
         organization: &str,
-    ) -> Vec<(SubscriptionProfile, Vec<profile::Held>)> {
-        profile::profiles(&self.store, organization)
+    ) -> Vec<(SubscriptionProfile, Vec<kestrel_profile::Held>)> {
+        kestrel_profile::profiles(&self.store, organization)
             .await
             .expect("the profiles should list")
     }
@@ -1779,7 +1780,7 @@ impl Kestrel {
 
     /// What the next Session spawned with the profile would be handed.
     pub async fn profile_contents(&self, profile: &SubscriptionProfile) -> Contents {
-        profile::contents(&self.store, profile)
+        kestrel_profile::contents(&self.store, profile)
             .await
             .expect("the profile should open")
     }
