@@ -1,0 +1,79 @@
+[
+  {
+    "name": "after-1-build",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=/private/tmp/kestrel-595-target",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "kestrel",
+      "--manifest-path",
+      "/Users/jackmoore/orca/workspaces/kestrel/0.4-35-write-one-page-contributing-and-validate/Cargo.toml"
+    ],
+    "started_unix": 1793457885.433454,
+    "wall_seconds": 101.815,
+    "exit_code": 0
+  },
+  {
+    "name": "after-1-compile",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=/private/tmp/kestrel-595-target",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "kestrel",
+      "--test",
+      "suite",
+      "--no-run",
+      "--manifest-path",
+      "/Users/jackmoore/orca/workspaces/kestrel/0.4-35-write-one-page-contributing-and-validate/Cargo.toml"
+    ],
+    "started_unix": 1793457987.2619321,
+    "wall_seconds": 132.26,
+    "exit_code": 0
+  },
+  {
+    "name": "after-1-first",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=/private/tmp/kestrel-595-target",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "kestrel",
+      "--test",
+      "suite",
+      "work::a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance",
+      "--manifest-path",
+      "/Users/jackmoore/orca/workspaces/kestrel/0.4-35-write-one-page-contributing-and-validate/Cargo.toml",
+      "--",
+      "--exact"
+    ],
+    "started_unix": 1793458119.5252979,
+    "wall_seconds": 1.724,
+    "exit_code": 101
+  }
+]

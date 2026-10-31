@@ -33,6 +33,10 @@ has not caught up to. Read the map, then the page in `docs/architecture/` for wh
 
 ### Checks
 
+For a fresh checkout, helper preparation, target isolation or Git-fixture setup, read
+[CONTRIBUTING.md](CONTRIBUTING.md). Run commands through `mise exec --` unless mise is activated
+in the shell.
+
 CI is the required gate: it selects checks by changed area
 (`.github/workflows/ci.yml`); the development image's expensive self-check runs separately
 (`.github/workflows/development-image.yml`). Locally, run the **narrowest check** that answers the
@@ -52,8 +56,8 @@ other agents, so each local cargo run has a real cost.
   `cargo test -p kestrel --test suite <module>::<name>`. The ordinary control-plane tests are one
   binary, `crates/kestrel/tests/suite/`, a module per area (`work`, `operator`, …); a heavy
   suite (`docker`, `image`, `compose`, …) is its own file in `crates/kestrel/tests/` and binary
-  (`--test docker`). The tests build the supervisor and scripted agent themselves, so a
-  whole-package or workspace run is many builds, not one.
+  (`--test docker`). Cargo prepares the supervisor, scripted agent and Client helpers once
+  per invocation.
 - Batch edits before checking; one check after a coherent change, never one per line.
 - Before pushing, `cargo fmt --all`. Leave the workspace suite and the `#[ignore]`d
   suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;

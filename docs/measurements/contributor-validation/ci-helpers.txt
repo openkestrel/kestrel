@@ -1,0 +1,4 @@
+helpers (rust)	UNKNOWN STEP	2026-10-31T04:05:14.1819152Z ##[group]Run bash .github/scripts/test-helper-preparation.sh
+helpers (rust)	UNKNOWN STEP	2026-10-31T04:05:14.1819635Z ^[[36;1mbash .github/scripts/test-helper-preparation.sh^[[0m
+helpers (rust)	UNKNOWN STEP	2026-10-31T04:06:52.9986090Z assertion `left == right` failed: executable helper is stale: /home/runner/work/kestrel/kestrel/target/debug/kestrel-supervisor
+helpers (rust)	UNKNOWN STEP	2026-10-31T04:06:53.2403720Z executable helper is missing: /home/runner/work/kestrel/kestrel/target/debug/kestrel-supervisor: No such file or directory (os error 2)

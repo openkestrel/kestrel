@@ -1,0 +1,12 @@
+ci
+workspace (rust, 3/3)	UNKNOWN STEP	2026-10-31T04:09:00.7560548Z      Summary [  71.970s] 515 tests run: 515 passed, 1098 skipped
+workspace (rust, 2/3)	UNKNOWN STEP	2026-10-31T04:08:52.7992249Z      Summary [  65.092s] 522 tests run: 522 passed, 1091 skipped
+workspace (rust, 1/3)	UNKNOWN STEP	2026-10-31T04:09:08.5718822Z      Summary [  78.309s] 508 tests run: 508 passed, 1105 skipped
+ci-second
+workspace (rust, 1/3)	UNKNOWN STEP	2026-10-31T04:00:46.2839652Z      Summary [  76.476s] 505 tests run: 505 passed, 1103 skipped
+workspace (rust, 2/3)	UNKNOWN STEP	2026-10-31T04:00:46.4070305Z      Summary [  83.230s] 520 tests run: 520 passed, 1088 skipped
+workspace (rust, 3/3)	UNKNOWN STEP	2026-10-31T04:00:42.9793208Z      Summary [  62.358s] 515 tests run: 515 passed, 1093 skipped
+ci-third
+workspace (rust, 3/3)	UNKNOWN STEP	2026-10-31T03:57:43.7706431Z      Summary [  59.146s] 513 tests run: 513 passed, 1095 skipped
+workspace (rust, 1/3)	UNKNOWN STEP	2026-10-31T03:59:05.0401796Z      Summary [  77.789s] 506 tests run: 506 passed, 1102 skipped
+workspace (rust, 2/3)	UNKNOWN STEP	2026-10-31T03:58:42.9705806Z      Summary [  64.795s] 521 tests run: 521 passed, 1087 skipped
