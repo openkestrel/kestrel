@@ -17,8 +17,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel-client/src/diagnostic/step.rs token-budget-exempt=828
 
-/crates/kestrel-client/src/main.rs token-budget-exempt=780
-
 /crates/kestrel-client/src/start.rs token-budget-exempt=813
 
 /crates/kestrel-client/src/view.rs token-budget-exempt=825

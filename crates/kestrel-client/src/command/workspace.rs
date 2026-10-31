@@ -1,0 +1,357 @@
+mod inspection;
+
+use anyhow::Result;
+use clap::Subcommand;
+use kestrel_operator_types as wire;
+use serde_json::json;
+
+use self::inspection::InspectionCommand;
+use super::input::given;
+use super::{Running, empty_list};
+use crate::{transcript, typed, view};
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkspaceCommand {
+    /// Open a Workspace against a Project and an Agent, and enqueue its first Session
+    Open {
+        /// The Project its work happens against
+        #[arg(long)]
+        project: String,
+        /// The Agent that participates in it
+        #[arg(long)]
+        agent: String,
+        /// The Subscription Profile its Sessions use
+        #[arg(long)]
+        profile: Option<String>,
+        /// The Sign-in Method its first Session is handed, without its harness's others
+        #[arg(long = "sign-in", value_name = "METHOD")]
+        sign_in: Option<String>,
+        /// The branch its work happens on
+        #[arg(long)]
+        branch: Option<String>,
+        /// The sealed Workspace this one carries on from, by generated name, identifier, any
+        /// unambiguous prefix of its identifier, or `latest`
+        #[arg(long, value_name = "WORKSPACE")]
+        continues: Option<String>,
+        /// The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from
+        /// standard input
+        #[arg(long)]
+        brief: Option<String>,
+        /// The model the first Session runs on. Without it, the Agent's
+        #[arg(long)]
+        model: Option<String>,
+        /// The mode the first Session runs in. Without it, the Agent's
+        #[arg(long)]
+        mode: Option<String>,
+        /// The thought level the first Session runs at. Without it, the Agent's
+        #[arg(long)]
+        thought_level: Option<String>,
+        /// The name the Brief is written under. Without it, the Operator's
+        #[arg(long)]
+        as_participant: Option<String>,
+        /// A Session it waits on until that one ends successfully, by generated name,
+        /// identifier, any unambiguous prefix of its identifier, or `latest`; repeatable
+        #[arg(long, value_name = "SESSION")]
+        depends_on: Vec<String>,
+    },
+    /// List Workspaces; an empty terminal lists the scoped next step, while a pipe emits nothing
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
+    List,
+    #[command(flatten)]
+    Inspection(InspectionCommand),
+    /// Show a Workspace
+    Show {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+    },
+    /// Add a participant's message; starts a Session or queues its next Turn
+    Post {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The participant saying the message. Without it, the Operator
+        #[arg(long)]
+        as_participant: Option<String>,
+        /// What the participant says
+        message: String,
+    },
+    /// Change a Held Message before a Turn takes it
+    #[command(subcommand)]
+    Message(MessageCommand),
+    /// Seal a Workspace: readable ever after, and never reopened
+    Seal {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+    },
+    /// Read a Workspace's Transcript, one entry a line, and the cursor a later read
+    /// resumes from
+    Transcript {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// Resume after the cursor a previous read ended with
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Keep reading as entries are appended, until the Workspace is sealed
+        #[arg(long)]
+        follow: bool,
+        /// Join the Workspace's presence as this person while following
+        #[arg(long, requires = "follow")]
+        as_participant: Option<String>,
+        #[arg(long, default_value = "shared_state")]
+        kinds: String,
+        #[arg(long)]
+        no_summaries: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum MessageCommand {
+    /// Replace a Held Message's text; only its author's name is accepted
+    Edit {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one. Without it, the Operator
+        #[arg(long)]
+        as_participant: Option<String>,
+        /// What the message now says
+        message: String,
+    },
+    /// Take a Held Message back, so no Turn sees it; only its author's name is accepted
+    Withdraw {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one. Without it, the Operator
+        #[arg(long)]
+        as_participant: Option<String>,
+    },
+}
+
+pub(crate) async fn run(running: Running<'_>, command: WorkspaceCommand) -> Result<()> {
+    let Running {
+        api,
+        presentation,
+        scoping,
+        invocation,
+        control_plane,
+        url,
+    } = running;
+    match command {
+        WorkspaceCommand::Open {
+            project,
+            agent,
+            profile,
+            sign_in,
+            branch,
+            continues,
+            brief,
+            model,
+            mode,
+            thought_level,
+            as_participant,
+            depends_on,
+        } => {
+            let organization = scoping.resolve().await?.organization;
+            let brief = brief.as_deref().map(given).transpose()?;
+            let opened: wire::Opened = api
+                .post_as(
+                    &["organizations", &organization, "workspaces"],
+                    &wire::WorkspaceDeclaration {
+                        project,
+                        agent,
+                        profile: Some(profile),
+                        sign_in_method: Some(sign_in),
+                        branch: Some(branch),
+                        continues: Some(continues),
+                        model: Some(model),
+                        mode: Some(mode),
+                        thought_level: Some(thought_level),
+                        brief: Some(brief),
+                        participant: Some(as_participant),
+                        depends_on: Some(Some(depends_on)),
+                    },
+                )
+                .await?;
+            typed::show(presentation, &view::OPENED, &opened)?;
+        }
+        WorkspaceCommand::List => {
+            let organization = scoping.resolve().await?.organization;
+            typed::collection(
+                presentation,
+                &view::WORKSPACES,
+                &api.get_as::<wire::ListWorkspacesResponse>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                ])
+                .await?,
+                &empty_list(
+                    control_plane,
+                    "Workspaces",
+                    Some(&organization),
+                    "workspace open --help",
+                ),
+            )?;
+        }
+        WorkspaceCommand::Inspection(command) => {
+            let running = Running {
+                api,
+                presentation,
+                scoping,
+                invocation,
+                control_plane,
+                url,
+            };
+            inspection::run(running, command).await?;
+        }
+        WorkspaceCommand::Show { workspace } => {
+            let organization = scoping.resolve().await?.organization;
+            typed::show(
+                presentation,
+                &view::WORKSPACE,
+                &api.get_as::<wire::Workspace>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                ])
+                .await?,
+            )?;
+        }
+        WorkspaceCommand::Post {
+            workspace,
+            as_participant,
+            message,
+        } => {
+            let organization = scoping.resolve().await?.organization;
+            let answer: wire::Posted = api
+                .post_as(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "messages",
+                    ],
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
+                )
+                .await?;
+            if invocation.json {
+                typed::show(presentation, &view::POSTED, &answer)?;
+            } else if let Some(session) = &answer.session {
+                typed::show(presentation, &view::SESSION_DECLARED, session)?;
+            } else if let Some(held) = &answer.held_message {
+                typed::show(presentation, &view::HELD_DECLARED, held)?;
+            } else {
+                eprintln!("queued as the next turn of the session already in flight");
+            }
+        }
+        WorkspaceCommand::Message(MessageCommand::Edit {
+            workspace,
+            id,
+            as_participant,
+            message,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            let answer: wire::HeldMessage = api
+                .put_as(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "messages",
+                        &id.to_string(),
+                    ],
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
+                )
+                .await?;
+            typed::show(presentation, &view::HELD_MESSAGE, &answer)?;
+        }
+        WorkspaceCommand::Message(MessageCommand::Withdraw {
+            workspace,
+            id,
+            as_participant,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            api.delete(
+                &[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    "messages",
+                    &id.to_string(),
+                ],
+                &wire::WorkspaceMessageWithdrawal {
+                    participant: as_participant,
+                },
+            )
+            .await?;
+        }
+        WorkspaceCommand::Seal { workspace } => {
+            let organization = scoping.resolve().await?.organization;
+            typed::show(
+                presentation,
+                &view::WORKSPACE_DECLARED,
+                &api.post_as::<wire::Workspace>(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "seal",
+                    ],
+                    &json!({}),
+                )
+                .await?,
+            )?;
+        }
+        WorkspaceCommand::Transcript {
+            workspace,
+            cursor,
+            follow,
+            as_participant,
+            kinds,
+            no_summaries,
+        } => {
+            let organization = scoping.resolve().await?.organization;
+            let read = transcript::read(
+                url,
+                &organization,
+                &workspace,
+                cursor,
+                transcript::Selection {
+                    follow,
+                    kinds: &kinds,
+                    summaries: !no_summaries,
+                    as_participant: as_participant.as_deref(),
+                },
+                presentation,
+            )
+            .await?;
+            // Beside the Transcript rather than in it, so stdout carries entries and nothing else.
+            if let Some(cursor) = read {
+                eprintln!("cursor  {cursor}");
+            }
+        }
+    }
+
+    Ok(())
+}
