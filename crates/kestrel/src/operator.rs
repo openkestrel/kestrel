@@ -2591,7 +2591,7 @@ async fn github_app_installed(
     .await?;
     let mut client = cp
         .client
-        .join("/setup")
+        .join("/setup/github")
         .map_err(|_| Refused::Unprocessable("The Client URL cannot return to setup".into()))?;
     client
         .query_pairs_mut()

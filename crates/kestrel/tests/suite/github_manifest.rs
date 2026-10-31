@@ -63,7 +63,7 @@ async fn select(kestrel: &Kestrel, stub: &GithubStub, client: &Client, state: &s
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let location = response.headers()["location"].to_str().unwrap();
-    assert!(location.contains("/setup?organization=acme&github_app_flow="));
+    assert!(location.contains("/setup/github?organization=acme&github_app_flow="));
     assert!(!location.contains(PRIVATE_KEY));
     assert!(!location.contains("manifest-webhook-secret"));
     repository(stub);

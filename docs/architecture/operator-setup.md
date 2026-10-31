@@ -256,7 +256,7 @@ way. `Images::read` is the one capability read for any later consumer.
 `url` and safe `flow` reference. A pending flow is separate from an Integration and lends no work
 authority. App conversion is claimed once, sealed across restart, and followed by authenticated
 installation discovery. The installation callback verifies the supplied ID through the created
-App before returning to the configured Client's `/setup` route with `github_app_flow`.
+App before returning to the configured Client's `/setup/github` route with `github_app_flow`.
 
 `GET /operator/github-app/flows/{flow}` exposes the phase, expiry, selected installation and safe
 completed outcome, never App material. Its `installations` and `repositories` reads page GitHub's
