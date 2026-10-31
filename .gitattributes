@@ -15,8 +15,6 @@ docs/measurements/** linguist-generated=true
 
 /ROADMAP.md token-budget-exempt=796
 
-/crates/kestrel-client/src/diagnostic/mod.rs token-budget-exempt=857
-
 /crates/kestrel-client/src/diagnostic/step.rs token-budget-exempt=828
 
 /crates/kestrel-client/src/main.rs token-budget-exempt=780

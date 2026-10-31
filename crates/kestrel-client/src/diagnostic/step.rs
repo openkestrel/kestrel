@@ -1,6 +1,7 @@
 use kestrel_operator_types as wire;
 
-use super::{Invocation, next_steps};
+use super::Invocation;
+use super::kind::next_steps;
 use crate::BINARY;
 use crate::shell::quoted;
 
