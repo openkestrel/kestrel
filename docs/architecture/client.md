@@ -59,6 +59,16 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   trailing LF or CRLF; generic UTF-8 file input stays byte-for-byte. Creation and holding are
   separate boundary writes, so a holding failure names the already-declared Profile while keeping
   the original typed diagnostic and exit. Generic writes make no provider or model call.
+- **Sign-ins** (`command/login.rs`, `relay.rs`, `sign_in.rs`): `kestrel login HARNESS` reads the
+  catalogue, asks for a method when stdin and stderr are both terminals and none is named, and
+  otherwise needs `--method` unless the harness and `--token`/`--file` leave one. A method's input
+  must match its mode before anything is sent. With neither flag a relay method starts its relay,
+  follows `…/events` and, after a drop, reads the known relay rather than starting another; the
+  Claude relay is refused without a terminal, Codex's waits without one. A partial save's
+  `unavailable` Diagnostic names the revision it saved. `kestrel sign-in test` checks a method's
+  `test_providers` locally, says it spends model usage, posts once and reads the known test until
+  it ends; only `worked` reaches stdout, and any other end is a typed Diagnostic (exit 4, or 5 for
+  `unavailable`, `harness_failed` and an interrupted test).
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
   answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for

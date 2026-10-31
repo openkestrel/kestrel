@@ -7,7 +7,7 @@ use std::os::fd::FromRawFd as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,8 @@ pub fn binary() -> &'static Path {
 pub struct Client {
     child: Child,
     stdout: Receiver<String>,
-    stderr: thread::JoinHandle<String>,
+    stderr: thread::JoinHandle<()>,
+    said: Arc<Mutex<Vec<u8>>>,
     home: TempDir,
     invocation: Invocation,
 }
@@ -44,6 +45,7 @@ pub struct Finished {
 pub struct Invocation {
     input: Option<String>,
     terminal_prompt: Option<String>,
+    answers: Vec<(String, String)>,
     environment: Vec<(String, String)>,
     files: Vec<(PathBuf, String)>,
     clones: Vec<(String, PathBuf, Option<String>)>,
@@ -58,6 +60,12 @@ impl Invocation {
 
     pub fn after_prompt(mut self, prompt: &str) -> Self {
         self.terminal_prompt = Some(prompt.to_owned());
+        self
+    }
+
+    /// Typed at the terminal once `prompt` appears, after whatever was typed before it.
+    pub fn answering(mut self, prompt: &str, typed: &str) -> Self {
+        self.answers.push((prompt.to_owned(), typed.to_owned()));
         self
     }
 
@@ -190,16 +198,24 @@ impl Client {
             }
         });
         let mut pipe = child.stderr.take().expect("stderr should be piped");
-        let stderr = thread::spawn(move || {
-            let mut said = String::new();
-            let _ = pipe.read_to_string(&mut said);
-            said
-        });
+        let said = Arc::new(Mutex::new(Vec::new()));
+        let stderr = {
+            let said = Arc::clone(&said);
+            thread::spawn(move || {
+                let mut buffer = [0; 4096];
+                while let Ok(read @ 1..) = pipe.read(&mut buffer) {
+                    said.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .extend_from_slice(&buffer[..read]);
+                }
+            })
+        };
 
         Self {
             child,
             stdout,
             stderr,
+            said,
             home,
             invocation,
         }
@@ -216,6 +232,24 @@ impl Client {
                     finished.status, finished.err
                 )
             }
+        }
+    }
+
+    fn err_so_far(&self) -> String {
+        String::from_utf8_lossy(&self.said.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_owned()
+    }
+
+    /// Waits until the Client has written `text` to stderr, while it goes on running.
+    pub fn until_err_says(&self, text: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !self.err_so_far().contains(text) {
+            assert!(
+                Instant::now() < deadline,
+                "the client never said {text}:\n{}",
+                self.err_so_far()
+            );
+            thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -237,9 +271,10 @@ impl Client {
         };
 
         let out = self.stdout.iter().collect();
-        let err = std::mem::replace(&mut self.stderr, thread::spawn(String::new))
+        std::mem::replace(&mut self.stderr, thread::spawn(|| ()))
             .join()
             .expect("stderr should drain");
+        let err = self.err_so_far();
         let left_behind = std::fs::read_dir(self.home.path())
             .expect("the home should list")
             .map(|entry| entry.expect("an entry"))
@@ -399,16 +434,29 @@ pub fn ran_on_a_terminal_as(
 
     let mut typing = controller.try_clone().expect("the controller should clone");
     let (ready, waiting) = channel();
-    let prompt = invocation.terminal_prompt.map(|prompt| (prompt, ready));
-    let waits_for_prompt = prompt.is_some();
-    let said = thread::spawn(move || read_until_hangup(controller, prompt));
-    if waits_for_prompt && waiting.recv_timeout(PATIENCE).is_err() {
-        let _ = child.kill();
-        panic!("the Client did not prompt in time");
+    let waits_for_prompt = invocation.terminal_prompt.is_some();
+    let prompts: Vec<String> = invocation
+        .terminal_prompt
+        .iter()
+        .cloned()
+        .chain(invocation.answers.iter().map(|(prompt, _)| prompt.clone()))
+        .collect();
+    let said = thread::spawn(move || read_until_hangup(controller, prompts, &ready));
+    let typings = std::iter::once((waits_for_prompt, typed.to_owned())).chain(
+        invocation
+            .answers
+            .into_iter()
+            .map(|(_, typed)| (true, typed)),
+    );
+    for (after_prompt, typed) in typings {
+        if after_prompt && waiting.recv_timeout(PATIENCE).is_err() {
+            let _ = child.kill();
+            panic!("the Client did not prompt in time");
+        }
+        typing
+            .write_all(typed.as_bytes())
+            .expect("the typing should reach the client");
     }
-    typing
-        .write_all(typed.as_bytes())
-        .expect("the typing should reach the client");
     let status = child.wait().expect("the client should be waited on");
 
     Shown {
@@ -478,22 +526,30 @@ fn a_terminal(columns: u16) -> (File, File) {
 /// them are the Client having exited.
 fn read_until_hangup(
     mut controller: File,
-    mut prompt: Option<(String, std::sync::mpsc::Sender<()>)>,
+    prompts: Vec<String>,
+    ready: &std::sync::mpsc::Sender<()>,
 ) -> String {
     let mut said = Vec::new();
     let mut buffer = [0; 4096];
+    let mut prompts = prompts.into_iter();
+    let mut prompt = prompts.next();
+    let mut searched = 0;
 
     loop {
         match controller.read(&mut buffer) {
             Ok(0) | Err(_) => break,
             Ok(read) => {
                 said.extend_from_slice(&buffer[..read]);
-                if prompt
-                    .as_ref()
-                    .is_some_and(|(text, _)| String::from_utf8_lossy(&said).contains(text))
-                {
-                    let (_, ready) = prompt.take().expect("the prompt was found");
+                while let Some(text) = &prompt {
+                    let Some(at) = said[searched..]
+                        .windows(text.len())
+                        .position(|window| window == text.as_bytes())
+                    else {
+                        break;
+                    };
+                    searched += at + text.len();
                     let _ = ready.send(());
+                    prompt = prompts.next();
                 }
             }
         }

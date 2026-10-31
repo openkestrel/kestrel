@@ -1,4 +1,4 @@
-use std::io::{IsTerminal as _, Read as _};
+use std::io::{BufRead as _, IsTerminal as _, Read as _};
 
 use anyhow::{Context as _, Result};
 
@@ -49,4 +49,51 @@ pub(super) fn read_standard_input(what: &str) -> Result<String> {
     }
 
     Ok(read)
+}
+
+/// Both ends a person would answer through, so a prompt is never written where nobody reads it.
+pub(super) fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// One line from a terminal with echo off, the prompt written only once echo is off.
+pub(super) fn hidden_line(prompt: &str) -> Result<String> {
+    let stdin = std::io::stdin();
+    let _unechoed = terminal::Unechoed::on(&stdin).ok_or_else(|| {
+        Failed::new(
+            Exit::Failure,
+            "cannot disable terminal echo; no secret was read",
+        )
+    })?;
+    eprint!("{prompt}");
+    let mut line = String::new();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .context("reading standard input")?;
+    eprintln!();
+
+    Ok(without_line_end(line))
+}
+
+/// An answer typed at a terminal, echoed as it is typed.
+pub(super) fn line(prompt: &str) -> Result<String> {
+    eprint!("{prompt}");
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("reading standard input")?;
+
+    Ok(without_line_end(line))
+}
+
+pub(super) fn without_line_end(mut text: String) -> String {
+    if text.ends_with('\n') {
+        text.pop();
+        if text.ends_with('\r') {
+            text.pop();
+        }
+    }
+    text
 }

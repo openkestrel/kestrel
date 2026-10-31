@@ -208,12 +208,31 @@ fn facts(diagnostic: &wire::Diagnostic) -> Vec<String> {
             .collect(),
         D::UnknownResponseDiagnostic(d) => d.context.evidence.iter().cloned().collect(),
         D::ClientFailureDiagnostic(d) => d.context.evidence.iter().cloned().collect(),
-        D::UnavailableDiagnostic(d) => d
-            .context
-            .retry_after_seconds
-            .map(|seconds| format!("retry after {seconds} seconds"))
-            .into_iter()
-            .collect(),
+        D::UnavailableDiagnostic(d) => {
+            let context = &d.context;
+            let mut facts: Vec<String> = context
+                .saved
+                .iter()
+                .map(|saved| {
+                    format!(
+                        "saved {} {} as revision {}, {} ({}), in {} {}",
+                        saved.harness,
+                        saved.method,
+                        saved.revision,
+                        saved.authentication.state,
+                        saved.authentication.source,
+                        saved.holding.resource,
+                        saved.holding.reference
+                    )
+                })
+                .collect();
+            facts.extend(
+                context
+                    .retry_after_seconds
+                    .map(|seconds| format!("retry after {seconds} seconds")),
+            );
+            facts
+        }
         _ => Vec::new(),
     }
 }

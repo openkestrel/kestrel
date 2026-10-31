@@ -215,6 +215,8 @@ async fn run(
         Command::Project(command) => command::project::run(running, command).await,
         Command::Agent(command) => command::agent::run(running, command).await,
         Command::Credential(command) => command::credential::run(running, command).await,
+        Command::Login(login) => command::login::run(running, login).await,
+        Command::SignIn(command) => command::sign_in::run(running, command).await,
         Command::Profile(command) => command::profile::run(running, command).await,
         Command::Integration(command) => command::integration::run(running, command).await,
         Command::Event(command) => command::event::run(running, command).await,
