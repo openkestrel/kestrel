@@ -27,6 +27,7 @@ pub mod operator_log;
 pub mod provider_stub;
 pub mod repository;
 pub mod scripted_agent;
+pub mod sign_in;
 pub mod supervisor;
 
 pub use database::Database;
