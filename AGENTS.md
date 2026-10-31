@@ -75,6 +75,13 @@ the user supplies another baseline. The test seams documented in
 [conventions](docs/architecture/conventions.md#tests) are pre-agreed; confirm a new seam before
 writing tests against it.
 
+### File size
+
+`.githooks/pre-commit` refuses a staged file over 5,000 tokens (bytes / 4) and says how to split
+it; mise installs it (`git config core.hooksPath .githooks`). Lockfiles, generated code and
+captured output are exempt through `linguist-generated` in `.gitattributes`; files written before
+the budget carry a `token-budget-exempt=<issue>` line there until that issue splits them.
+
 ### Pull requests
 
 A pull request that closes an issue names it in the body, and only one based on `main` can: GitHub

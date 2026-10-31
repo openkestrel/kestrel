@@ -21,3 +21,9 @@ set -e
 cargo run --locked -p kestrel-operator-types --bin generate --features generate
 git diff --exit-code -- crates/kestrel-operator-types/src packages/client/src/operator/sse.gen.ts
 """
+
+# Git never installs hooks on clone, so the first `mise install` does it, and an activated shell
+# repeats it on entry for clones whose tools were already installed.
+[hooks]
+postinstall = "git config core.hooksPath .githooks"
+enter = "git config core.hooksPath .githooks"

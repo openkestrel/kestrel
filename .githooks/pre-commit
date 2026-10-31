@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Refuses staged files over 5,000 tokens (bytes / 4). Skips binary files, files marked
+# `linguist-generated` in .gitattributes, and files with a `token-budget-exempt` line there.
+set -euo pipefail
+
+max_tokens=5000
+max_bytes=$((max_tokens * 4))
+over=()
+
+while IFS=$'\t' read -r -d '' added _ path; do
+  [[ $added == - ]] && continue
+  skip=$(git check-attr --cached linguist-generated token-budget-exempt -- "$path" |
+    grep -Ev ': (unspecified|unset|false)$' || true)
+  [[ -n $skip ]] && continue
+  bytes=$(git cat-file -s ":$path")
+  if ((bytes > max_bytes)); then
+    over+=("$(((bytes + 3) / 4)) tokens  $path")
+  fi
+done < <(git diff --cached --no-renames --numstat -z --diff-filter=AM)
+
+((${#over[@]} == 0)) && exit 0
+
+cat >&2 <<MSG
+pre-commit: these staged files are over ${max_tokens} tokens (${max_bytes} bytes, tokens = bytes / 4):
+
+$(printf '  %s\n' "${over[@]}")
+
+Split each one before committing. Do not get under the limit by deleting comments, tests or
+docs, by joining lines, or by shortening names, and do not commit with --no-verify.
+
+How to split:
+
+1. Read the whole file and list its responsibilities: the types, functions or sections that
+   change together. Each group becomes one file, named for what it does, not "part2" or "utils".
+2. Move each group out whole. Keep a group's private helpers with it; something two groups use
+   goes in its own file, not copied into both.
+3. Rust (src/foo.rs):
+   - Make foo a directory module: keep src/foo.rs as the parent and add src/foo/<name>.rs,
+     declared with \`mod <name>;\` in foo.rs.
+   - Re-export what callers already use (\`pub use <name>::Thing;\`) so no import elsewhere
+     changes; then narrow visibility to pub(super) or pub(crate) where nothing outside needs it.
+   - Inline tests: move \`#[cfg(test)] mod tests { ... }\` to src/foo/tests.rs, declared as
+     \`#[cfg(test)] mod tests;\` (see crates/kestrel/src/work/tests.rs).
+   - A test module in crates/kestrel/tests/suite/: split by behaviour into new sibling modules
+     declared in suite/main.rs, and move shared fixtures into tests/support/.
+4. TypeScript (foo.ts / Foo.tsx): one component, hook or concern per file; move types, helpers
+   and subcomponents to sibling files and import them. An e2e spec splits into several
+   *.spec.ts files by the feature each test exercises, with shared setup in a helper module.
+5. Markdown: split at the top-level headings into pages in the same directory, keep a short
+   index that links to each page, and update every link that pointed at a moved heading.
+6. Other files: split at their natural units (one job, task, table or config section per file)
+   and include or reference the parts the way the format already supports.
+7. Stage every new file and re-run the narrowest check that proves the split changed nothing
+   (for Rust, \`cargo clippy -p <crate> --all-targets -- -D warnings\`), then commit again.
+
+A file that is generated, vendored, a lockfile or captured output is not split: add its path
+to .gitattributes with linguist-generated=true.
+MSG
+exit 1

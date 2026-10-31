@@ -1,0 +1,172 @@
+# Not written by agents: .githooks/pre-commit skips these, and GitHub collapses them in diffs.
+Cargo.lock linguist-generated=true
+bun.lock linguist-generated=true
+**/package-lock.json linguist-generated=true
+crates/kestrel-operator-types/src/generated.rs linguist-generated=true
+**/*.gen.ts linguist-generated=true
+docs/measurements/** linguist-generated=true
+
+# Over the token budget from before it existed; each value is the issue that splits the file.
+# Blank lines keep parallel PRs that delete neighbouring entries from conflicting.
+
+/.github/workflows/ci.yml token-budget-exempt=855
+
+/GLOSSARY.md token-budget-exempt=816
+
+/ROADMAP.md token-budget-exempt=796
+
+/crates/kestrel-client/src/diagnostic/mod.rs token-budget-exempt=857
+
+/crates/kestrel-client/src/diagnostic/step.rs token-budget-exempt=828
+
+/crates/kestrel-client/src/main.rs token-budget-exempt=780
+
+/crates/kestrel-client/src/start.rs token-budget-exempt=813
+
+/crates/kestrel-client/src/view.rs token-budget-exempt=825
+
+/crates/kestrel-scripted-agent/src/main.rs token-budget-exempt=789
+
+/crates/kestrel-supervisor/src/completer.rs token-budget-exempt=797
+
+/crates/kestrel-supervisor/src/harness.rs token-budget-exempt=784
+
+/crates/kestrel-supervisor/src/lib.rs token-budget-exempt=793
+
+/crates/kestrel-supervisor/src/link.rs token-budget-exempt=822
+
+/crates/kestrel-supervisor/tests/link.rs token-budget-exempt=842
+
+/crates/kestrel/src/compute/local_exec.rs token-budget-exempt=853
+
+/crates/kestrel/src/declaration.rs token-budget-exempt=811
+
+/crates/kestrel/src/domain.rs token-budget-exempt=802
+
+/crates/kestrel/src/integration/github.rs token-budget-exempt=786
+
+/crates/kestrel/src/integration/manifest.rs token-budget-exempt=834
+
+/crates/kestrel/src/integration/mod.rs token-budget-exempt=800
+
+/crates/kestrel/src/link/mod.rs token-budget-exempt=830
+
+/crates/kestrel/src/log.rs token-budget-exempt=798
+
+/crates/kestrel/src/operator.rs token-budget-exempt=779
+
+/crates/kestrel/src/repository.rs token-budget-exempt=847
+
+/crates/kestrel/src/role/work.rs token-budget-exempt=841
+
+/crates/kestrel/src/sign_in.rs token-budget-exempt=851
+
+/crates/kestrel/src/sign_in/model_test.rs token-budget-exempt=823
+
+/crates/kestrel/src/sign_in/relay.rs token-budget-exempt=829
+
+/crates/kestrel/src/start_readiness.rs token-budget-exempt=815
+
+/crates/kestrel/src/store/integration.rs token-budget-exempt=790
+
+/crates/kestrel/src/store/mod.rs token-budget-exempt=837
+
+/crates/kestrel/src/store/trigger.rs token-budget-exempt=804
+
+/crates/kestrel/src/store/workspace.rs token-budget-exempt=781
+
+/crates/kestrel/src/trigger.rs token-budget-exempt=820
+
+/crates/kestrel/src/work.rs token-budget-exempt=791
+
+/crates/kestrel/src/work/tests.rs token-budget-exempt=819
+
+/crates/kestrel/src/workspace.rs token-budget-exempt=809
+
+/crates/kestrel/tests/compose.rs token-budget-exempt=835
+
+/crates/kestrel/tests/subscription.rs token-budget-exempt=856
+
+/crates/kestrel/tests/suite/acp.rs token-budget-exempt=810
+
+/crates/kestrel/tests/suite/authority.rs token-budget-exempt=814
+
+/crates/kestrel/tests/suite/changes.rs token-budget-exempt=824
+
+/crates/kestrel/tests/suite/cli.rs token-budget-exempt=785
+
+/crates/kestrel/tests/suite/declaration.rs token-budget-exempt=827
+
+/crates/kestrel/tests/suite/deliberate.rs token-budget-exempt=803
+
+/crates/kestrel/tests/suite/events.rs token-budget-exempt=850
+
+/crates/kestrel/tests/suite/follow_up.rs token-budget-exempt=795
+
+/crates/kestrel/tests/suite/github_manifest.rs token-budget-exempt=812
+
+/crates/kestrel/tests/suite/handoff.rs token-budget-exempt=836
+
+/crates/kestrel/tests/suite/interrupt.rs token-budget-exempt=838
+
+/crates/kestrel/tests/suite/link.rs token-budget-exempt=788
+
+/crates/kestrel/tests/suite/maintenance.rs token-budget-exempt=833
+
+/crates/kestrel/tests/suite/model_test.rs token-budget-exempt=848
+
+/crates/kestrel/tests/suite/on_open_workspace.rs token-budget-exempt=852
+
+/crates/kestrel/tests/suite/operator.rs token-budget-exempt=778
+
+/crates/kestrel/tests/suite/operator_defaults.rs token-budget-exempt=839
+
+/crates/kestrel/tests/suite/options.rs token-budget-exempt=832
+
+/crates/kestrel/tests/suite/presentation.rs token-budget-exempt=806
+
+/crates/kestrel/tests/suite/pull_request.rs token-budget-exempt=799
+
+/crates/kestrel/tests/suite/readiness.rs token-budget-exempt=843
+
+/crates/kestrel/tests/suite/relay.rs token-budget-exempt=807
+
+/crates/kestrel/tests/suite/replies.rs token-budget-exempt=845
+
+/crates/kestrel/tests/suite/sign_in.rs token-budget-exempt=854
+
+/crates/kestrel/tests/suite/stream.rs token-budget-exempt=821
+
+/crates/kestrel/tests/suite/trailing.rs token-budget-exempt=794
+
+/crates/kestrel/tests/suite/trigger.rs token-budget-exempt=787
+
+/crates/kestrel/tests/suite/work.rs token-budget-exempt=831
+
+/crates/kestrel/tests/suite/workspace_files.rs token-budget-exempt=818
+
+/crates/kestrel/tests/support/github_stub.rs token-budget-exempt=844
+
+/crates/kestrel/tests/support/mod.rs token-budget-exempt=782
+
+/docs/acceptance-0.2.md token-budget-exempt=826
+
+/docs/acceptance-0.3.md token-budget-exempt=805
+
+/docs/architecture/link.md token-budget-exempt=840
+
+/docs/architecture/operator-setup.md token-budget-exempt=849
+
+/docs/research/cloud-agent-environments.md token-budget-exempt=808
+
+/docs/research/cloud-agent-guardrails.md token-budget-exempt=792
+
+/openapi/link.json token-budget-exempt=783
+
+/openapi/operator.json token-budget-exempt=777
+
+/packages/client/e2e/activities.spec.ts token-budget-exempt=846
+
+/packages/client/e2e/composer.spec.ts token-budget-exempt=801
+
+/packages/client/e2e/work-pane.spec.ts token-budget-exempt=817
