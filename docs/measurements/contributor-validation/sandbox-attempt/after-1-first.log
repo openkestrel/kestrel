@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running tests/suite/main.rs (/private/tmp/kestrel-595-target/debug/deps/suite-d9603609abd444fe)
+
+running 1 test
+test work::a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance ... FAILED
+
+failures:
+
+---- work::a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance stdout ----
+
+thread 'work::a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance' (7645404) panicked at crates/kestrel/tests/suite/../support/built.rs:242:10:
+the Cargo parent's start time should be readable: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    work::a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1044 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p kestrel --test suite`
