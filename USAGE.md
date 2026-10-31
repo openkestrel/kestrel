@@ -91,7 +91,7 @@ ANTHROPIC_API_KEY=… kestrel start --credential ANTHROPIC_API_KEY \
   --brief "Make the README explain what this project does"
 ```
 
-`start` works in your one organization, uses the clone's origin for the repository and project name, chooses the branch from the project or clone, and uses the sole existing agent or the default OpenCode harness. It prints the values it selected and their sources before applying them. At a terminal it asks once for confirmation; use `--yes` for an unattended run. If it cannot determine a required value, it names the flag to supply. You can set `--organization`, `--project`, `--repository`, `--branch`, `--agent`, `--harness`, and `--model` explicitly.
+`start` works in your one organization, uses the project whose first repository is the clone's origin (by any transport or spelling) or else the origin for the repository and project name, chooses the branch from the project or clone, and uses the sole existing agent or the default OpenCode harness. It prints the values it selected and their sources before applying them. At a terminal it asks once for confirmation; use `--yes` for an unattended run. If it cannot determine a required value, it names the flag to supply. You can set `--organization`, `--project`, `--repository`, `--branch`, `--agent`, `--harness`, and `--model` explicitly.
 
 `--credential` names an environment variable in your shell. Kestrel stores its value for the organization and supplies it to the harness when a session starts. The value does not go into the command line. The `start` command creates any missing declarations, opens a workspace, and queues its first session together. It does not silently replace an existing project or agent with different settings.
 

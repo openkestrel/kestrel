@@ -23,6 +23,8 @@ pub struct Given {
 pub struct Existing {
     pub organization_declared: bool,
     pub projects: Vec<Project>,
+    /// The Projects whose first repository the clone's origin names, when the clone was asked.
+    pub declaring: Option<Vec<String>>,
     pub agents: Vec<Agent>,
     pub credentials: Vec<String>,
 }
@@ -44,6 +46,7 @@ impl Existing {
     ) -> Self {
         Self {
             organization_declared,
+            declaring: None,
             projects: projects
                 .into_iter()
                 .map(|record| Project {
@@ -212,14 +215,20 @@ pub fn plan(
     existing: &Existing,
 ) -> Result<Plan, Vec<Missing>> {
     let Existing {
-        projects, agents, ..
+        projects,
+        declaring,
+        agents,
+        ..
     } = existing;
     let mut missing = Vec::new();
 
-    let named_project = given
-        .project
-        .as_ref()
-        .and_then(|name| projects.iter().find(|declared| &declared.name == name));
+    let find = |name: &str| projects.iter().find(|declared| declared.name == name);
+    let named_project = given.project.as_deref().and_then(find);
+    let matched = match declaring.as_deref() {
+        Some([name]) => find(name),
+        _ => None,
+    };
+    let ambiguous = declaring.as_ref().is_some_and(|names| names.len() > 1);
     let repositories = if !given.repositories.is_empty() {
         Some(flagged(given.repositories, "--repository"))
     } else if let Some(named) = named_project {
@@ -229,10 +238,29 @@ pub fn plan(
         ))
     } else {
         match (&clone.root, &clone.origin) {
-            (Some(root), Some(origin)) => Some(inferred(
-                vec![origin.clone()],
-                format!("origin of the clone at {}", root.display()),
-            )),
+            (Some(root), Some(origin)) => {
+                let cloned = format!("origin of the clone at {}", root.display());
+                if let Some(project) = matched {
+                    Some(inferred(
+                        project.repositories.clone(),
+                        format!(
+                            "what {} is declared against, beginning with the {cloned}",
+                            project.name
+                        ),
+                    ))
+                } else {
+                    if ambiguous {
+                        missing.push(Missing {
+                            flag: "--project",
+                            because: format!(
+                                "the projects {} each begin with the {cloned}",
+                                declaring.as_deref().unwrap_or_default().join(", ")
+                            ),
+                        });
+                    }
+                    Some(inferred(vec![origin.clone()], cloned))
+                }
+            }
             (Some(root), None) => {
                 missing.push(Missing {
                     flag: "--repository",
@@ -250,13 +278,16 @@ pub fn plan(
         }
     };
 
-    let declaring = repositories.as_ref().and_then(|repositories| {
-        projects
-            .iter()
-            .find(|project| project.repositories == repositories.value)
+    let declaring = matched.or_else(|| {
+        repositories.as_ref().and_then(|repositories| {
+            projects
+                .iter()
+                .find(|project| project.repositories == repositories.value)
+        })
     });
     let project = match (given.project, declaring, &repositories) {
         (Some(project), _, _) => Some(flagged(project, "--project")),
+        (None, None, _) if ambiguous => None,
         (None, Some(declaring), Some(repositories)) => Some(inferred(
             declaring.name.clone(),
             format!("already declares {}", repositories.value.join(", ")),
@@ -945,6 +976,7 @@ mod tests {
             projects: vec![widgets_declared_against(
                 "https://github.com/acme/widgets.git",
             )],
+            declaring: None,
             agents: vec![Agent {
                 name: "builder".to_owned(),
                 harness: "claude".to_owned(),

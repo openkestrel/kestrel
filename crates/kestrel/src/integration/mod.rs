@@ -19,6 +19,7 @@ use crate::domain::{
 };
 use crate::integration::credential::App;
 use crate::integration::github::{Github, Installed, Minted, Refused, Unproven};
+use crate::repository::Identity;
 use crate::store::Store;
 use crate::store::integration::Recorded;
 
@@ -758,22 +759,7 @@ fn selected<'a>(
 
 /// Only over HTTPS, so a token is never handed to a request that would send it in the clear.
 fn same_repository(selected: &str, asked: &str) -> bool {
-    if !asked.starts_with("https://") {
-        return false;
-    }
-    match (
-        github::named_repository(selected),
-        github::named_repository(asked),
-    ) {
-        (Some(selected), Some(asked)) => selected.eq_ignore_ascii_case(&asked),
-        _ => {
-            let bare = |url: &str| {
-                let url = url.trim_end_matches('/');
-                url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
-            };
-            bare(selected) == bare(asked)
-        }
-    }
+    asked.starts_with("https://") && Identity::same(selected, asked)
 }
 
 pub struct Reached {

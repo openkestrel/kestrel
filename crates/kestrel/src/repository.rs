@@ -8,6 +8,10 @@ use crate::domain::{Integration, Organization, Project, SelectedIntegration};
 use crate::integration::{self, github, github::Github};
 use crate::store::{Declared, Store, Tx};
 
+mod identity;
+
+pub use identity::Identity;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     pub given: String,
@@ -183,11 +187,11 @@ pub async fn bound(store: &Store, selecting: &Selecting<'_>) -> Result<Vec<Bound
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(selecting.organization).await?;
     for selection in selecting.selections {
-        let named = address(&selection.repository)
-            .map_err(|why| refused(Constraint::GitRepository, why))?;
-        let Some(repository) = bound.iter_mut().find(|bound| {
-            bound.resolved.given == selection.repository || bound.resolved.address == named
-        }) else {
+        address(&selection.repository).map_err(|why| refused(Constraint::GitRepository, why))?;
+        let Some(repository) = bound
+            .iter_mut()
+            .find(|bound| Identity::same(&bound.resolved.address, &selection.repository))
+        else {
             return Err(refused(
                 Constraint::DeclaredRepository,
                 format!(

@@ -73,7 +73,10 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   `session show`'s successful output.
 - `kestrel start` (`start.rs`) infers a Project and Agent from the local clone and explains every
   inferred value on stderr before changing anything. Its Organization is the scope's: a
-  repository's owner never names one, and only an explicit `--organization` declares one.
+  repository's owner never names one, and only an explicit `--organization` declares one. It
+  never compares addresses itself: `listProjects?repository=` names the Projects whose first
+  repository the clone's origin names (`repository::Identity`), and the one it finds supplies the
+  repositories and Integrations the start uses.
 
 ## The browser Client
 
