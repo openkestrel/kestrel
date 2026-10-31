@@ -71,24 +71,22 @@ async fn reported(
     workspace: &kestrel::domain::Workspace,
     untracked: u64,
 ) -> Value {
-    reported_after(kestrel, workspace, untracked, &Value::Null).await
+    reported_after(kestrel, workspace, untracked, None).await
 }
 
 async fn reported_after(
     kestrel: &Kestrel,
     workspace: &kestrel::domain::Workspace,
     untracked: u64,
-    previous: &Value,
+    previous: Option<&Value>,
 ) -> Value {
     answered_with(kestrel, workspace, |answer| {
         answer["state"] == "reported"
             && answer["repositories"][0]["untracked"] == untracked
             && answer["last_report"]["reported_at"] == answer["reported_at"]
             && answer["last_report"]["repositories"] == answer["repositories"]
-            && previous["reported_at"].as_str().is_none_or(|previous| {
-                answer["reported_at"]
-                    .as_str()
-                    .is_some_and(|at| at > previous)
+            && previous.is_none_or(|previous| {
+                answer["reported_at"].as_str().unwrap() > previous["reported_at"].as_str().unwrap()
             })
     })
     .await
@@ -155,7 +153,7 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
     let closed = reported(&kestrel, &workspace, 1).await;
     kestrel.advance(Duration::from_millis(1)).await;
     kestrel.stop_session(session.id).await;
-    let answer = reported_after(&kestrel, &workspace, 1, &closed).await;
+    let answer = reported_after(&kestrel, &workspace, 1, Some(&closed)).await;
     assert_eq!(
         answer["repositories"][0],
         json!({
@@ -253,7 +251,7 @@ async fn a_summary_changes_during_a_scripted_turn_and_returns_after_a_restart_be
     assert!(initial["repositories"][0]["pushed"].is_null());
     kestrel.advance(Duration::from_millis(1)).await;
     std::fs::write(checkout.join("written.txt"), "work in progress\n").unwrap();
-    let changed = reported_after(&kestrel, &workspace, 1, &initial).await;
+    let changed = reported_after(&kestrel, &workspace, 1, Some(&initial)).await;
     assert_eq!(
         std::fs::read_to_string(checkout.join(".git/index.lock")).unwrap(),
         "held by the agent"
@@ -267,11 +265,11 @@ async fn a_summary_changes_during_a_scripted_turn_and_returns_after_a_restart_be
     kestrel.advance(Duration::from_millis(1)).await;
     kestrel.interrupt(session.id, "operator").await.unwrap();
     kestrel.answered(session.id, 1).await;
-    let closed = reported_after(&kestrel, &workspace, 1, &changed).await;
+    let closed = reported_after(&kestrel, &workspace, 1, Some(&changed)).await;
     kestrel.stop_session(session.id).await;
     kestrel.advance(Duration::from_millis(1)).await;
     let kestrel = kestrel.kill_and_restart().await;
-    let reconnected = reported_after(&kestrel, &workspace, 1, &closed).await;
+    let reconnected = reported_after(&kestrel, &workspace, 1, Some(&closed)).await;
     assert!(reconnected["reported_at"].as_str().unwrap() > closed["reported_at"].as_str().unwrap());
     kestrel.teardown().await;
 }
