@@ -1,5 +1,5 @@
+use crate::timer::Clock;
 use anyhow::Result;
-use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Operator, OperatorId};
@@ -7,11 +7,12 @@ use crate::store::Declared;
 
 pub struct Operators<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 impl<'a> Operators<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     pub async fn current(&mut self) -> Result<Option<Operator>> {
@@ -47,7 +48,7 @@ impl<'a> Operators<'a> {
         )
         .bind(operator.id.to_string())
         .bind(&operator.name)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await?;
         Ok(Declared {

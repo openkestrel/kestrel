@@ -1,3 +1,4 @@
+use crate::timer::Clock;
 use anyhow::{Context as _, Result};
 use jiff::{SignedDuration, Timestamp};
 use sqlx::sqlite::SqliteRow;
@@ -26,11 +27,12 @@ macro_rules! triggers_where {
 
 pub struct Triggers<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 impl<'a> Triggers<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     #[expect(
@@ -65,7 +67,7 @@ impl<'a> Triggers<'a> {
             disabled_because: None,
             firing_budget: FiringBudget::default(),
             applied,
-            declared_at: Timestamp::now(),
+            declared_at: self.clock.now(),
         };
 
         let columns = Columns::of(fires, trigger.declared_at)?;
@@ -127,7 +129,7 @@ impl<'a> Triggers<'a> {
         profile: Option<&SubscriptionProfile>,
         applied: bool,
     ) -> Result<Trigger> {
-        let declared_at = Timestamp::now();
+        let declared_at = self.clock.now();
         let columns = Columns::of(fires, declared_at)?;
 
         sqlx::query(
@@ -346,7 +348,7 @@ impl<'a> Triggers<'a> {
         .bind(state.as_str())
         .bind(enabled)
         .bind(enabled)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(state.as_str())
         .bind(trigger.id.to_string())
         .execute(&mut *self.connection)
@@ -540,20 +542,6 @@ impl<'a> Triggers<'a> {
         }
 
         Ok(due)
-    }
-
-    pub async fn considered(&mut self, event: EventRecordId, at: Timestamp) -> Result<()> {
-        sqlx::query(
-            "UPDATE firing SET considered_at = ?
-             WHERE event_record_id = ? AND outcome = 'held'",
-        )
-        .bind(at.to_string())
-        .bind(event.to_string())
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("recording when the event {event} was last considered"))?;
-
-        Ok(())
     }
 
     pub async fn still_held(&mut self, trigger: &Trigger, event: &Event) -> Result<bool> {
@@ -765,7 +753,7 @@ impl<'a> Triggers<'a> {
         .bind(recording.worked_ahead)
         .bind(recording.correlation)
         .bind(recording.considered_at.map(|at| at.to_string()))
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| {

@@ -15,7 +15,6 @@ pub mod workspace;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
@@ -36,6 +35,7 @@ use crate::store::pull_request::PullRequests;
 use crate::store::queue::Queue;
 use crate::store::trigger::Triggers;
 use crate::store::workspace::Workspaces;
+use crate::timer::Clock;
 
 const DATABASE: &str = "kestrel.db";
 /// `waited_us` spans the pool acquire and `BEGIN IMMEDIATE` together, and is emitted on failure too.
@@ -47,12 +47,17 @@ pub struct Store {
     reads: SqlitePool,
     keyring: Arc<Keyring>,
     notices: Notices,
+    clock: Clock,
     pub(crate) hook_updates: Arc<tokio::sync::Mutex<()>>,
     pub(crate) relay_inputs: crate::sign_in::relay::Inputs,
 }
 
 impl Store {
     pub async fn open(data_dir: &Path) -> Result<Self> {
+        Self::open_on(data_dir, Clock::System).await
+    }
+
+    pub async fn open_on(data_dir: &Path, clock: Clock) -> Result<Self> {
         tokio::fs::create_dir_all(data_dir)
             .await
             .with_context(|| format!("creating kestrel's data directory {}", data_dir.display()))?;
@@ -83,10 +88,15 @@ impl Store {
             pool,
             reads,
             keyring: Arc::new(Keyring::beside(data_dir)?),
-            notices: Notices::default(),
+            notices: Notices::on(clock.clone()),
+            clock,
             relay_inputs: Default::default(),
             hook_updates: Default::default(),
         })
+    }
+
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     pub fn notices(&self) -> Notices {
@@ -97,17 +107,18 @@ impl Store {
     /// writes while another has written, rather than making it wait its turn. Only a transaction
     /// that never writes may take `read` instead.
     pub async fn begin(&self) -> Result<Tx<'_>> {
-        let asked = Instant::now();
+        let asked = self.clock.instant();
         let transaction = self.pool.begin_with("BEGIN IMMEDIATE").await;
         trace!(
             target: WRITE_LOCK,
-            waited_us = u64::try_from(asked.elapsed().as_micros()).unwrap_or(u64::MAX),
+            waited_us = u64::try_from(self.clock.instant().duration_since(asked).as_micros()).unwrap_or(u64::MAX),
             "waited for the write lock"
         );
 
         Ok(Tx {
             transaction: transaction?,
             keyring: &self.keyring,
+            clock: &self.clock,
             touched: Touched::default(),
             publishes: Some(self.notices.clone()),
         })
@@ -119,6 +130,7 @@ impl Store {
         Ok(Tx {
             transaction: self.reads.begin().await?,
             keyring: &self.keyring,
+            clock: &self.clock,
             touched: Touched::default(),
             publishes: None,
         })
@@ -301,46 +313,51 @@ pub fn busy(error: &anyhow::Error) -> bool {
 pub struct Tx<'a> {
     transaction: Transaction<'a, Sqlite>,
     keyring: &'a Keyring,
+    clock: &'a Clock,
     touched: Touched,
     /// None on a read, which never publishes: `Touched` is only collected where a write commits.
     publishes: Option<Notices>,
 }
 
 impl Tx<'_> {
+    pub fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
+
     pub fn log(&mut self) -> Log<'_> {
-        Log::over(&mut self.transaction)
+        Log::over(&mut self.transaction, self.clock)
     }
 
     pub fn operators(&mut self) -> operator::Operators<'_> {
-        operator::Operators::over(&mut self.transaction)
+        operator::Operators::over(&mut self.transaction, self.clock)
     }
 
     pub fn organizations(&mut self) -> Organizations<'_> {
-        Organizations::over(&mut self.transaction, self.keyring)
+        Organizations::over(&mut self.transaction, self.keyring, self.clock)
     }
 
     pub fn profiles(&mut self) -> Profiles<'_> {
-        Profiles::over(&mut self.transaction, self.keyring)
+        Profiles::over(&mut self.transaction, self.keyring, self.clock)
     }
 
     pub fn relays(&mut self) -> relay::Relays<'_> {
-        relay::Relays::over(&mut self.transaction)
+        relay::Relays::over(&mut self.transaction, self.clock)
     }
 
     pub fn sign_ins(&mut self) -> sign_in::SignIns<'_> {
-        sign_in::SignIns::over(&mut self.transaction)
+        sign_in::SignIns::over(&mut self.transaction, self.clock)
     }
 
     pub fn projects(&mut self) -> Projects<'_> {
-        Projects::over(&mut self.transaction)
+        Projects::over(&mut self.transaction, self.clock)
     }
 
     pub fn agents(&mut self) -> Agents<'_> {
-        Agents::over(&mut self.transaction)
+        Agents::over(&mut self.transaction, self.clock)
     }
 
     pub fn workspaces(&mut self) -> Workspaces<'_> {
-        Workspaces::over(&mut self.transaction, &mut self.touched)
+        Workspaces::over(&mut self.transaction, &mut self.touched, self.clock)
     }
 
     pub fn lease_sweep(&mut self) -> lease_sweep::LeaseSweep<'_> {
@@ -352,19 +369,19 @@ impl Tx<'_> {
     }
 
     pub fn app_flows(&mut self) -> app_flow::AppFlows<'_> {
-        app_flow::AppFlows::over(&mut self.transaction, self.keyring)
+        app_flow::AppFlows::over(&mut self.transaction, self.keyring, self.clock)
     }
 
     pub fn integrations(&mut self) -> Integrations<'_> {
-        Integrations::over(&mut self.transaction, self.keyring)
+        Integrations::over(&mut self.transaction, self.keyring, self.clock)
     }
 
     pub fn triggers(&mut self) -> Triggers<'_> {
-        Triggers::over(&mut self.transaction)
+        Triggers::over(&mut self.transaction, self.clock)
     }
 
     pub fn pull_requests(&mut self) -> PullRequests<'_> {
-        PullRequests::over(&mut self.transaction, &mut self.touched)
+        PullRequests::over(&mut self.transaction, &mut self.touched, self.clock)
     }
 
     pub async fn commit(self) -> Result<()> {
@@ -645,7 +662,7 @@ mod tests {
                     because: "no such directory".to_owned(),
                 },
             }],
-            reported_at: Timestamp::now(),
+            reported_at: store.clock().now(),
         };
 
         let mut tx = store.begin().await.unwrap();

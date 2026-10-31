@@ -163,7 +163,7 @@ pub async fn change(
         change.revision,
         |read| {
             let mut maintained = read.clone();
-            let now = Timestamp::now();
+            let now = store.clock().now();
             if let Some(name) = change.name {
                 maintained.name = name.to_owned();
             }
@@ -254,7 +254,7 @@ pub async fn retire(
     )
     .to_string();
     tx.integrations()
-        .retire(&read, Timestamp::now(), LEFT_UNSAID, &held)
+        .retire(&read, store.clock().now(), LEFT_UNSAID, &held)
         .await?;
     let retired = tx.integrations().named(&organization, name).await?;
     tx.commit().await?;
@@ -279,9 +279,9 @@ async fn switched(
         }
         let mut maintained = read.clone();
         maintained.state = to;
-        maintained.disabled_at = maintained.disabled().then(Timestamp::now);
+        maintained.disabled_at = maintained.disabled().then(|| store.clock().now());
         if maintained.enabled() && maintained.polled() {
-            maintained.poll_due_at = Some(Timestamp::now());
+            maintained.poll_due_at = Some(store.clock().now());
         }
         Ok(Some(maintained))
     })
@@ -400,7 +400,13 @@ pub async fn replace_private_key(
         private_key,
     );
     if let Err(unproven) = github.proves(connection, &replacement).await {
-        bail!(unproven_replacement(&read, organization, unproven, again()));
+        bail!(unproven_replacement(
+            &read,
+            organization,
+            unproven,
+            again(),
+            store.clock().now(),
+        ));
     }
 
     let mut tx = store.begin().await?;
@@ -428,6 +434,7 @@ fn unproven_replacement(
     organization: &str,
     unproven: Unproven,
     again: Next,
+    now: Timestamp,
 ) -> Reason {
     const KEPT: &str = "the previous key is still in use";
     let rejected = |constraint, message: String| Reason::InvalidField {
@@ -487,7 +494,7 @@ fn unproven_replacement(
             ),
         ),
         Unproven::RateLimited { until } => unavailable(
-            Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+            Some(until.duration_since(now).as_secs().max(0)),
             format!(
                 "github is rate limiting until {until}, so the replacement was not checked; {KEPT}"
             ),
@@ -684,7 +691,9 @@ pub async fn lend(
 
         return Ok(match refused {
             Refused::RateLimited { until } => Lent::Unavailable {
-                retry_after_seconds: Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+                retry_after_seconds: Some(
+                    until.duration_since(store.clock().now()).as_secs().max(0),
+                ),
                 message: format!(
                     "github is rate limiting the integration {} until {until}",
                     integration.name
@@ -804,7 +813,16 @@ pub async fn repositories(
     let installed = github
         .installed_repositories(connection, page, per_page)
         .await
-        .map_err(|unproven| unreached(&read, organization, OPERATION, unproven, Again::Read))?;
+        .map_err(|unproven| {
+            unreached(
+                &read,
+                organization,
+                OPERATION,
+                unproven,
+                Again::Read,
+                store.clock().now(),
+            )
+        })?;
 
     Ok(Reached {
         watched: connection.repository.clone(),
@@ -822,6 +840,7 @@ pub fn unreached(
     operation: &'static str,
     unproven: Unproven,
     again: Again,
+    now: Timestamp,
 ) -> Reason {
     let inspect = || Next::inspect(Resource::Integration, integration.name.clone());
     let conflict = |state, next, message: String| Reason::StateConflict {
@@ -879,7 +898,7 @@ pub fn unreached(
             ),
         ),
         Unproven::RateLimited { until } => unavailable(
-            Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+            Some(until.duration_since(now).as_secs().max(0)),
             format!("github is rate limiting until {until}, so {repository} was not checked"),
         ),
         Unproven::Unanswered(error) => {
@@ -1008,7 +1027,7 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
     else {
         bail!("integration {} is not polled", integration.name);
     };
-    let started = Timestamp::now();
+    let started = store.clock().now();
     let read = read(store, github, integration, from).await;
     let mut tx = store.begin().await?;
     if !tx
@@ -1028,7 +1047,10 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
                 "a poll came back with nothing"
             );
             tx.integrations()
-                .poll_refused(integration, back_off(interval, &refused))
+                .poll_refused(
+                    integration,
+                    back_off(interval, &refused, store.clock().now()),
+                )
                 .await?;
             tx.commit().await?;
             return Ok(Polled::default());
@@ -1129,8 +1151,8 @@ async fn read(
 
 /// A rate limit names the moment it lifts, and asking again before then spends a request on
 /// another refusal; nothing is gained by polling more often than the interval either way.
-fn back_off(interval: SignedDuration, refused: &Refused) -> Timestamp {
-    let next = Timestamp::now() + interval;
+fn back_off(interval: SignedDuration, refused: &Refused, now: Timestamp) -> Timestamp {
+    let next = now + interval;
 
     match refused {
         Refused::RateLimited { until } => next.max(*until),
@@ -1167,12 +1189,13 @@ mod tests {
 
     #[test]
     fn a_rate_limit_defers_the_next_poll_to_the_moment_it_lifts() {
-        let until = Timestamp::now() + SignedDuration::from_hours(1);
+        let until = crate::timer::Clock::System.now() + SignedDuration::from_hours(1);
 
         assert_eq!(
             back_off(
                 SignedDuration::from_secs(1),
-                &Refused::RateLimited { until }
+                &Refused::RateLimited { until },
+                crate::timer::Clock::System.now(),
             ),
             until
         );
@@ -1180,13 +1203,14 @@ mod tests {
 
     #[test]
     fn a_rate_limit_that_has_already_lifted_still_waits_the_interval_out() {
-        let until = Timestamp::now() - SignedDuration::from_hours(1);
+        let until = crate::timer::Clock::System.now() - SignedDuration::from_hours(1);
 
         assert!(
             back_off(
                 SignedDuration::from_secs(60),
-                &Refused::RateLimited { until }
-            ) > Timestamp::now()
+                &Refused::RateLimited { until },
+                crate::timer::Clock::System.now(),
+            ) > crate::timer::Clock::System.now()
         );
     }
 
@@ -1195,8 +1219,9 @@ mod tests {
         assert!(
             back_off(
                 SignedDuration::from_secs(60),
-                &Refused::Failed(anyhow!("connection refused"))
-            ) > Timestamp::now() + SignedDuration::from_secs(50)
+                &Refused::Failed(anyhow!("connection refused")),
+                crate::timer::Clock::System.now(),
+            ) > crate::timer::Clock::System.now() + SignedDuration::from_secs(50)
         );
     }
 }

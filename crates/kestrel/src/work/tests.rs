@@ -4,6 +4,7 @@ use tempfile::TempDir;
 use super::*;
 use crate::domain::SessionState;
 use crate::log::Window;
+use crate::timer::Clock;
 use crate::workspace;
 
 const INSTANCE: &str = "local-exec/kestrel-fixture";
@@ -27,7 +28,9 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let data_dir = TempDir::new().unwrap();
-        let store = Store::open(data_dir.path()).await.unwrap();
+        let store = Store::open_on(data_dir.path(), Clock::manual())
+            .await
+            .unwrap();
         let mut tx = store.begin().await.unwrap();
         let organization = tx
             .organizations()
@@ -56,7 +59,7 @@ impl Fixture {
             let mut tx = store.begin().await.unwrap();
             let session = tx
                 .workspaces()
-                .claim_session(&queued, Timestamp::now() + LEASE, false)
+                .claim_session(&queued, store.clock().now() + LEASE, false)
                 .await
                 .unwrap()
                 .expect("the fixture's session should claim");
@@ -400,7 +403,9 @@ async fn concurrent_reports_and_a_replay_after_reopening_the_store_append_once()
     );
     first.unwrap();
     second.unwrap();
-    fixture.store = Store::open(fixture.data_dir.path()).await.unwrap();
+    fixture.store = Store::open_on(fixture.data_dir.path(), fixture.store.clock().clone())
+        .await
+        .unwrap();
     fixture.report(Some(1), said).await.unwrap();
     fixture
         .report(
@@ -499,15 +504,17 @@ async fn connection_and_heartbeat_reports_ignore_numbers_and_do_not_consume_them
             )
             .await
             .unwrap();
-        let before = session(&fixture.store, fixture.session.id)
-            .await
-            .unwrap()
-            .lease_expires_at
-            .unwrap();
+        fixture
+            .store
+            .clock()
+            .advance(std::time::Duration::from_secs(1));
         fixture.report(seq, Report::Heartbeat).await.unwrap();
         let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
         assert_eq!(recorded.connected.unwrap().version, "test-version");
-        assert!(recorded.lease_expires_at.unwrap() > before);
+        assert_eq!(
+            recorded.lease_expires_at,
+            Some(fixture.store.clock().now() + LEASE)
+        );
     }
     assert_eq!(fixture.entries().await.len(), 1);
     fixture.report(Some(1), Report::Started).await.unwrap();
@@ -517,15 +524,7 @@ async fn connection_and_heartbeat_reports_ignore_numbers_and_do_not_consume_them
 #[tokio::test]
 async fn a_report_is_accepted_after_its_lease_passes_until_the_sweep_ends_it() {
     let fixture = Fixture::new().await;
-    let mut tx = fixture.store.begin().await.unwrap();
-    tx.workspaces()
-        .hold_lease(
-            &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
-        )
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    fixture.store.clock().advance(LEASE.unsigned_abs());
 
     fixture.report(Some(1), Report::Started).await.unwrap();
     assert!(
@@ -540,15 +539,7 @@ async fn a_report_is_accepted_after_its_lease_passes_until_the_sweep_ends_it() {
 #[tokio::test]
 async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_the_exit() {
     let fixture = Fixture::new().await;
-    let mut tx = fixture.store.begin().await.unwrap();
-    tx.workspaces()
-        .hold_lease(
-            &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
-        )
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    fixture.store.clock().advance(LEASE.unsigned_abs());
 
     supervisor_exited(
         &fixture.store,
@@ -784,7 +775,9 @@ async fn idle_hint_follows_a_committed_ending_once_with_the_seal_deadline() {
         .get(fixture.session.workspace)
         .await
         .unwrap();
-    let reopened = Store::open(fixture.data_dir.path()).await.unwrap();
+    let reopened = Store::open_on(fixture.data_dir.path(), fixture.store.clock().clone())
+        .await
+        .unwrap();
     let hints = recorded_idle_hints(&reopened).await;
     assert_eq!(
         hints,
@@ -948,7 +941,7 @@ async fn idle_hint_does_not_escape_a_rolled_back_ending() {
 #[test]
 fn idle_hint_is_ignored_by_both_drivers() {
     use crate::compute::{Docker, Driver, IdleHint, LocalExec};
-    let now = Timestamp::now();
+    let now = crate::timer::Clock::System.now();
     for driver in [
         Driver::Docker(Docker::provisioning_from("unused")),
         Driver::LocalExec(LocalExec::running("unused")),
@@ -997,22 +990,14 @@ async fn a_heartbeat_renews_only_the_live_session_it_names_on_its_instance() {
             before
         );
     }
-    let mut tx = fixture.store.begin().await.unwrap();
-    tx.workspaces()
-        .hold_lease(
-            &fixture.session,
-            Timestamp::now() - SignedDuration::from_secs(1),
-        )
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
+    fixture.store.clock().advance(LEASE.unsigned_abs());
     fixture.report(None, Report::Heartbeat).await.unwrap();
     assert!(
         session(&fixture.store, fixture.session.id)
             .await
             .unwrap()
             .lease_expires_at
-            > Some(Timestamp::now())
+            > Some(fixture.store.clock().now())
     );
     fail(&fixture.store, &fixture.session, "stopped")
         .await

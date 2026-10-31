@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::timer::Clock;
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
@@ -15,6 +16,7 @@ use crate::store::workspace::occupying;
 
 pub struct SignIns<'a> {
     connection: &'a mut SqliteConnection,
+    clock: &'a Clock,
 }
 
 /// Every write of material calls this in its own transaction, so no material is held without a
@@ -22,11 +24,12 @@ pub struct SignIns<'a> {
 pub(crate) async fn mint(
     connection: &mut SqliteConnection,
     authentication: &Authentication,
+    now: Timestamp,
 ) -> Result<i64> {
     let revision: i64 = sqlx::query_scalar(
         "INSERT INTO material_revision (written_at) VALUES (?) RETURNING revision",
     )
-    .bind(Timestamp::now().to_string())
+    .bind(now.to_string())
     .fetch_one(&mut *connection)
     .await
     .context("minting a material revision")?;
@@ -53,8 +56,17 @@ pub(crate) async fn mint(
     Ok(revision)
 }
 
-pub(crate) async fn mint_refreshed(connection: &mut SqliteConnection, from: i64) -> Result<i64> {
-    let revision = mint(connection, &Authentication::unchecked(Source::Refresh)).await?;
+pub(crate) async fn mint_refreshed(
+    connection: &mut SqliteConnection,
+    from: i64,
+    now: Timestamp,
+) -> Result<i64> {
+    let revision = mint(
+        connection,
+        &Authentication::unchecked(Source::Refresh, now),
+        now,
+    )
+    .await?;
     sqlx::query("UPDATE material_revision SET refreshed_from = ? WHERE revision = ?")
         .bind(from)
         .bind(revision)
@@ -66,8 +78,8 @@ pub(crate) async fn mint_refreshed(connection: &mut SqliteConnection, from: i64)
 }
 
 impl<'a> SignIns<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, clock: &'a Clock) -> Self {
+        Self { connection, clock }
     }
 
     pub async fn authentication(&mut self, revision: i64) -> Result<Authentication> {
@@ -134,7 +146,7 @@ impl<'a> SignIns<'a> {
         )
         .bind(state.as_str())
         .bind(source.as_str())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(revision)
         .execute(&mut *self.connection)
         .await
@@ -167,7 +179,7 @@ impl<'a> SignIns<'a> {
         .bind(image)
         .bind(result.as_str())
         .bind(source.as_str())
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording what {harness} did with {model}"))?;
@@ -186,7 +198,7 @@ impl<'a> SignIns<'a> {
             .execute(&mut *self.connection)
             .await?;
 
-        let handed_at = Timestamp::now().to_string();
+        let handed_at = self.clock.now().to_string();
         for ((kind, name), (profile, revision)) in supplied {
             sqlx::query(
                 "INSERT INTO session_material
@@ -298,7 +310,7 @@ impl<'a> SignIns<'a> {
         .bind(profile.organization.to_string())
         .bind(&held.harness)
         .bind(&held.holder)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("lending the profile {} to {}", profile.name, held.holder))?;
@@ -382,7 +394,7 @@ impl<'a> SignIns<'a> {
                          ORDER BY created_at, id LIMIT 1)
              RETURNING *",
         )
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .fetch_optional(&mut *self.connection)
         .await?
         .as_ref()
@@ -415,7 +427,7 @@ impl<'a> SignIns<'a> {
         .bind(state.as_str())
         .bind(outcome.map(TestOutcome::as_str))
         .bind(message)
-        .bind(Timestamp::now().to_string())
+        .bind(self.clock.now().to_string())
         .bind(id)
         .execute(&mut *self.connection)
         .await

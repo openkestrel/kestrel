@@ -210,9 +210,7 @@ async fn a_report_on_a_lapsed_lease_is_taken_before_the_sweep_and_refused_after_
     let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
-    kestrel
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    kestrel.lapse_unswept().await;
     let link = Link::to(&kestrel.link());
     let started = |seq| Reported {
         session: Some(session.id),
@@ -243,9 +241,7 @@ async fn a_session_enqueued_before_the_idle_sweep_keeps_its_workspace_open() {
     let kestrel = Kestrel::stepped().await;
     let held = a_workspace(&kestrel).await;
     let idle = another_workspace(&kestrel).await;
-    let a_day_ago = Timestamp::now() - SignedDuration::from_hours(25);
-    kestrel.last_active(&held, a_day_ago).await;
-    kestrel.last_active(&idle, a_day_ago).await;
+    kestrel.away_for(Duration::from_secs(25 * 60 * 60));
 
     kestrel.enqueue_session(held.id).await;
     kestrel.work_pass().await;
@@ -324,6 +320,7 @@ async fn a_comment_feeds_its_workspace_unless_the_workspace_seals_before_the_pas
         "jack",
         "please add the missing test",
     ));
+    polled(&kestrel).await;
     kestrel.work_pass().await;
     let fed = kestrel.sessions(workspace.id).await;
     assert_eq!(
@@ -393,10 +390,7 @@ async fn a_read_before_the_retention_pass_sees_an_old_thought_and_one_after_sees
         )
         .await;
     kestrel.stop_session(session.id).await;
-    kestrel
-        .database()
-        .backdate_transcript(workspace.id, "2020-02-01T00:00:00Z".parse().unwrap())
-        .await;
+    kestrel.away_for(Duration::from_secs(31 * 24 * 60 * 60));
     let thought = |entries: &[Entry]| {
         entries
             .iter()

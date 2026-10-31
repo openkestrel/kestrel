@@ -96,7 +96,7 @@ pub async fn start(
                 organization.record.id,
                 &credential.variable,
                 &credential.secret,
-                &Authentication::unchecked(Source::GenericWrite),
+                &Authentication::unchecked(Source::GenericWrite, store.clock().now()),
             )
             .await?;
     }

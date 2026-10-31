@@ -16,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{BoxError, Form, Json, Router};
 use futures_core::Stream;
-use jiff::SignedDuration;
+use jiff::{SignedDuration, Timestamp};
 use kestrel_operator_types as wire;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1575,7 +1575,7 @@ async fn start(
     let started = start::start(
         &control_plane.store,
         &control_plane.images,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &plan,
     )
     .await?;
@@ -1712,7 +1712,7 @@ async fn declare_project(
     let Json(declaration) = declaration?;
     let checked = declaration::check_project(
         &control_plane.store,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &project_declaration(declaration),
         "declare_project",
@@ -1830,7 +1830,7 @@ async fn declared_declaration(
     let applied = declaration::apply(
         &control_plane.store,
         &control_plane.images,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &declaration,
         mode,
@@ -2539,7 +2539,7 @@ async fn github_app_page(
     State(cp): State<ControlPlane>,
     Query(query): Query<GithubAppQuery>,
 ) -> Result<Response, Refused> {
-    let github = Github::unfenced()?;
+    let github = Github::unfenced(cp.store.clock())?;
     if let Some(installation) = query.installation_id {
         integration::manifest::installed(&cp.store, &github, &query.state, installation).await?;
     }
@@ -2556,8 +2556,13 @@ async fn github_app_callback(
         .code
         .ok_or_else(|| Refused::Unprocessable("GitHub did not supply a manifest code".into()))?;
     Ok(setup_page(
-        integration::manifest::callback(&cp.store, &Github::unfenced()?, &query.state, &code)
-            .await?,
+        integration::manifest::callback(
+            &cp.store,
+            &Github::unfenced(cp.store.clock())?,
+            &query.state,
+            &code,
+        )
+        .await?,
     ))
 }
 
@@ -2569,7 +2574,7 @@ async fn github_app_installed(
         return Ok(setup_page(
             integration::manifest::discovery_page(
                 &cp.store,
-                &Github::unfenced()?,
+                &Github::unfenced(cp.store.clock())?,
                 &query.state,
                 query.page,
             )
@@ -2578,7 +2583,7 @@ async fn github_app_installed(
     };
     let status = integration::manifest::installed(
         &cp.store,
-        &Github::unfenced()?,
+        &Github::unfenced(cp.store.clock())?,
         &query.state,
         installation,
     )
@@ -2631,7 +2636,7 @@ async fn github_app_installations(
     Ok(Json(
         integration::manifest::installations(
             &cp.store,
-            &Github::unfenced()?,
+            &Github::unfenced(cp.store.clock())?,
             &flow,
             pages.page,
             pages.per_page,
@@ -2648,7 +2653,7 @@ async fn github_app_repositories(
     Ok(Json(
         integration::manifest::repositories(
             &cp.store,
-            &Github::unfenced()?,
+            &Github::unfenced(cp.store.clock())?,
             &flow,
             pages.page,
             pages.per_page,
@@ -2664,8 +2669,13 @@ async fn github_app_finish(
 ) -> Result<Json<wire::GithubAppFlow>, Refused> {
     let Json(request) = request?;
     Ok(Json(
-        integration::manifest::finish(&cp.store, &Github::unfenced()?, &flow, &request.repository)
-            .await?,
+        integration::manifest::finish(
+            &cp.store,
+            &Github::unfenced(cp.store.clock())?,
+            &flow,
+            &request.repository,
+        )
+        .await?,
     ))
 }
 
@@ -2676,19 +2686,29 @@ async fn github_app_setup_finish(
 ) -> Result<Response, Refused> {
     integration::manifest::finish(
         &cp.store,
-        &Github::unfenced()?,
+        &Github::unfenced(cp.store.clock())?,
         &query.state,
         &request.repository,
     )
     .await?;
     Ok(setup_page(
-        integration::manifest::page(&cp.store, &Github::unfenced()?, &query.state, None).await?,
+        integration::manifest::page(
+            &cp.store,
+            &Github::unfenced(cp.store.clock())?,
+            &query.state,
+            None,
+        )
+        .await?,
     ))
 }
 
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
-fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
+fn integration_record(
+    integration: Integration,
+    organization: &str,
+    now: Timestamp,
+) -> wire::Integration {
     let diagnostic = (!integration.enabled()).then(|| {
         diagnosis(
             integration::out_of_use(&integration, organization, "use_integration"),
@@ -2709,6 +2729,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
                         organization,
                         integration::rotation::RESUME,
                         rotation,
+                        now,
                     ),
                     None,
                 )
@@ -2804,7 +2825,13 @@ async fn integrations(
     Ok(Json(
         integrations
             .into_iter()
-            .map(|integration| integration_record(integration, &organization))
+            .map(|integration| {
+                integration_record(
+                    integration,
+                    &organization,
+                    control_plane.store.clock().now(),
+                )
+            })
             .collect(),
     ))
 }
@@ -2815,7 +2842,11 @@ async fn show_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let integration = integration::integration(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(integration, &organization)))
+    Ok(Json(integration_record(
+        integration,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 /// What identifies the connection; naming one in a change is refused rather than ignored.
@@ -2880,7 +2911,11 @@ async fn change_integration(
     )
     .await?;
 
-    Ok(Json(integration_record(changed, &organization)))
+    Ok(Json(integration_record(
+        changed,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 #[derive(Deserialize)]
@@ -2896,7 +2931,7 @@ async fn integration_repositories(
 ) -> Result<Json<wire::IntegrationRepositories>, Refused> {
     let reached = integration::repositories(
         &control_plane.store,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &name,
         asked.page,
@@ -2929,7 +2964,11 @@ async fn disable_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let disabled = integration::disable(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(disabled, &organization)))
+    Ok(Json(integration_record(
+        disabled,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn enable_integration(
@@ -2938,7 +2977,11 @@ async fn enable_integration(
 ) -> Result<Json<wire::Integration>, Refused> {
     let enabled = integration::enable(&control_plane.store, &organization, &name).await?;
 
-    Ok(Json(integration_record(enabled, &organization)))
+    Ok(Json(integration_record(
+        enabled,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn retire_integration(
@@ -2955,7 +2998,11 @@ async fn retire_integration(
     )
     .await?;
 
-    Ok(Json(integration_record(retired, &organization)))
+    Ok(Json(integration_record(
+        retired,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn set_integration_webhook_url(
@@ -2968,22 +3015,31 @@ async fn set_integration_webhook_url(
         closed(&request).map_err(|why| malformed(None, why))?;
     let changed = integration::hook::set_url(
         &cp.store,
-        &Github::unfenced()?,
+        &Github::unfenced(cp.store.clock())?,
         &organization,
         &name,
         request.base.as_deref().or(cp.webhook_base.as_deref()),
         request.revision,
     )
     .await?;
-    Ok(Json(integration_record(changed, &organization)))
+    Ok(Json(integration_record(
+        changed,
+        &organization,
+        cp.store.clock().now(),
+    )))
 }
 
 async fn integration_webhook(
     State(cp): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
 ) -> Result<Json<wire::IntegrationWebhook>, Refused> {
-    let (hook, deliveries, pending_url) =
-        integration::hook::status(&cp.store, &Github::unfenced()?, &organization, &name).await?;
+    let (hook, deliveries, pending_url) = integration::hook::status(
+        &cp.store,
+        &Github::unfenced(cp.store.clock())?,
+        &organization,
+        &name,
+    )
+    .await?;
     Ok(Json(wire::IntegrationWebhook {
         url: hook.url,
         pending_url,
@@ -3006,14 +3062,18 @@ async fn rotate_integration_webhook_secret(
     let Json(rotation) = rotation?;
     let rotated = integration::rotate_webhook_secret(
         &control_plane.store,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &name,
         rotation.revision,
     )
     .await?;
 
-    Ok(Json(integration_record(rotated, &organization)))
+    Ok(Json(integration_record(
+        rotated,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn resume_integration_webhook_secret_rotation(
@@ -3022,13 +3082,17 @@ async fn resume_integration_webhook_secret_rotation(
 ) -> Result<Json<wire::Integration>, Refused> {
     let rotated = integration::resume_webhook_secret_rotation(
         &control_plane.store,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &name,
     )
     .await?;
 
-    Ok(Json(integration_record(rotated, &organization)))
+    Ok(Json(integration_record(
+        rotated,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 async fn replace_integration_private_key(
@@ -3039,7 +3103,7 @@ async fn replace_integration_private_key(
     let Json(replacement) = replacement?;
     let replaced = integration::replace_private_key(
         &control_plane.store,
-        &Github::unfenced()?,
+        &Github::unfenced(control_plane.store.clock())?,
         &organization,
         &name,
         &replacement.private_key,
@@ -3047,7 +3111,11 @@ async fn replace_integration_private_key(
     )
     .await?;
 
-    Ok(Json(integration_record(replaced, &organization)))
+    Ok(Json(integration_record(
+        replaced,
+        &organization,
+        control_plane.store.clock().now(),
+    )))
 }
 
 fn registration_name(registration: &wire::IntegrationRegistration) -> &str {
@@ -3114,7 +3182,7 @@ async fn register_integration(
     named("register_integration", registration_name(&registration))?;
     let (carries, connecting) = registration_connecting(&registration)?;
     let carries: Vec<Direction> = carries.iter().map(domain_direction).collect();
-    let github = Github::unfenced()?;
+    let github = Github::unfenced(control_plane.store.clock())?;
     let registered = integration::register(
         &control_plane.store,
         &github,
@@ -3129,7 +3197,11 @@ async fn register_integration(
 
     Ok((
         StatusCode::CREATED,
-        Json(integration_record(registered, &organization)),
+        Json(integration_record(
+            registered,
+            &organization,
+            control_plane.store.clock().now(),
+        )),
     ))
 }
 

@@ -27,7 +27,7 @@ const AT_A_TIME: usize = 32;
 
 /// How long a held request waits for an event before its work item is asked about again, so a
 /// missed event delays its start rather than stranding it.
-const RECONSIDER: SignedDuration = SignedDuration::from_mins(5);
+pub const RECONSIDER: SignedDuration = SignedDuration::from_mins(5);
 
 pub const AGENT_LABEL: &str = "agent:";
 
@@ -235,7 +235,7 @@ async fn tested(
         organization: trigger.organization.id,
         integration,
         occurrence,
-        recorded_at: Timestamp::now(),
+        recorded_at: store.clock().now(),
     };
 
     let mut tx = store.begin().await?;
@@ -435,7 +435,7 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
         (
             tx.triggers().unfired_matches(AT_A_TIME).await?,
             tx.triggers()
-                .held_due(Timestamp::now() - RECONSIDER, AT_A_TIME)
+                .held_due(store.clock().now() - RECONSIDER, AT_A_TIME)
                 .await?,
         )
     };
@@ -447,7 +447,7 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
         .chain(held.into_iter().map(|held| (held, true)));
     for ((trigger, event), reconsidering) in considered {
         let consideration = Consideration {
-            at: Timestamp::now(),
+            at: store.clock().now(),
             reconsidering,
         };
         let integration = match event.integration {
@@ -575,7 +575,7 @@ pub async fn dispatch(store: &Store, github: &Github, dispatch: Dispatch<'_>) ->
         dispatch.asked,
         Some(Ok(readiness)),
         Consideration {
-            at: Timestamp::now(),
+            at: store.clock().now(),
             reconsidering: false,
         },
     )
@@ -618,6 +618,7 @@ async fn dispatched(
             "agent": asked.agent,
             "issue": fetched,
         }),
+        github.clock().now(),
     ))
 }
 
@@ -643,10 +644,11 @@ async fn firing(
         .await;
     }
     // A held firing was counted against the budget when it was first recorded.
+    let now = tx.now();
     if !consideration.reconsidering
         && tx
             .triggers()
-            .firing_budget_is_exhausted(trigger, jiff::Timestamp::now())
+            .firing_budget_is_exhausted(trigger, now)
             .await?
     {
         let because = trigger.firing_budget_exhausted_because();

@@ -433,13 +433,14 @@ pub(super) fn stop_named(supervisor: &str) -> io::Result<()> {
 mod tests {
     use std::io::{BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt as _;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
     use super::super::Driver;
     use super::*;
     use crate::domain::SessionId;
+    use crate::timer::Clock;
 
     fn process_exists(pid: i32) -> bool {
         #[allow(unsafe_code)]
@@ -449,8 +450,8 @@ mod tests {
     }
 
     fn eventually_gone(pid: i32) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
+        let deadline = Clock::System.instant().into_std() + Duration::from_secs(5);
+        while Clock::System.instant().into_std() < deadline {
             if !process_exists(pid) {
                 return;
             }
@@ -607,14 +608,17 @@ mod tests {
             .supervise(&[])
             .expect("the supervisor should start");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Clock::System.instant().into_std() + Duration::from_secs(5);
         loop {
             match supervisor.status().expect("the status should read") {
                 Some(exited) => {
                     assert_eq!(exited, Exited::with(3));
                     break;
                 }
-                None => assert!(Instant::now() < deadline, "the supervisor never exited"),
+                None => assert!(
+                    Clock::System.instant().into_std() < deadline,
+                    "the supervisor never exited"
+                ),
             }
             std::thread::sleep(Duration::from_millis(20));
         }

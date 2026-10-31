@@ -892,6 +892,7 @@ pub async fn unwritten_trigger(
     checked: &CheckedTrigger,
 ) -> Result<Trigger> {
     let refs = trigger_refs(tx, &organization, checked).await?;
+    let declared_at = tx.now();
     Ok(Trigger {
         id: crate::domain::TriggerId::generate(),
         organization,
@@ -907,7 +908,7 @@ pub async fn unwritten_trigger(
         disabled_because: None,
         firing_budget: FiringBudget::default(),
         applied: true,
-        declared_at: jiff::Timestamp::now(),
+        declared_at,
     })
 }
 

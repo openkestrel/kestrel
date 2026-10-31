@@ -1361,7 +1361,7 @@ fn published_transcript_reads_describe_activities_ranges_and_snapshots() {
 
 #[tokio::test]
 async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tombstones() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (session, on) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
     let completion = |started: &str, finished: &str| json!({"started_at": started, "finished_at": finished, "turn_outcome": null});
@@ -1449,13 +1449,7 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
     );
     assert!(expanded["entries"][0]["entry"]["payload_fields"].is_null());
     assert_eq!(expanded["entries"][0]["entry"]["title"], "read source");
-    let past_retention = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24);
-    for seq in 3..=5 {
-        kestrel
-            .database()
-            .backdate_entry(session.workspace, seq, past_retention)
-            .await;
-    }
+    kestrel.away_for(std::time::Duration::from_secs(31 * 24 * 60 * 60));
     kestrel
         .retain_transcript()
         .await

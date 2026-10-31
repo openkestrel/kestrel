@@ -7,7 +7,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Schedule, TriggerState, Workspace, WorkspaceId};
 use kestrel::log::Entry;
-use kestrel::trigger::{Asked, Fired};
+use kestrel::trigger::{Asked, Fired, RECONSIDER};
 use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::{Kestrel, templates};
@@ -42,6 +42,8 @@ async fn dogfood_declarations(kestrel: &Kestrel) {
     );
 }
 
+const POLL: SignedDuration = SignedDuration::from_millis(1);
+
 async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
     kestrel
         .register_integration(
@@ -50,7 +52,7 @@ async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
             REPOSITORY,
             &stub.base_url(),
             &[Direction::Inbound, Direction::Outbound],
-            SignedDuration::from_millis(1),
+            POLL,
         )
         .await;
 }
@@ -941,7 +943,7 @@ const PASSES: usize = 20;
 
 async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
     for _ in 0..PASSES {
-        kestrel.work_pass().await;
+        kestrel.advance(POLL.unsigned_abs()).await;
         if fired(kestrel, r#type, outcome).await.is_some() {
             return;
         }
@@ -951,7 +953,7 @@ async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
 
 async fn passed_until_opened(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
     for _ in 0..PASSES {
-        kestrel.work_pass().await;
+        kestrel.advance(POLL.unsigned_abs()).await;
         let workspaces = kestrel.workspaces("acme").await;
         if workspaces.len() >= count {
             return workspaces;
@@ -1052,29 +1054,26 @@ async fn a_held_delegation_whose_unblocking_event_was_missed_starts_on_the_sweep
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
-    firing_of(&kestrel, ASSIGNED, "held").await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    passed_until_fired(&kestrel, ASSIGNED, "held").await;
+    kestrel.advance(POLL.unsigned_abs()).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     unblocked(&stub, 43);
-    let held = kestrel
-        .events("acme")
-        .await
-        .into_iter()
-        .find(|event| event.occurrence.r#type == ASSIGNED)
-        .expect("the assignment is recorded");
-    kestrel
-        .last_considered(
-            held.record_id,
-            jiff::Timestamp::now() - SignedDuration::from_hours(1),
-        )
-        .await;
+    kestrel.advance(POLL.unsigned_abs()).await;
+    assert!(
+        kestrel.workspaces("acme").await.is_empty(),
+        "a held delegation started before the sweep reconsidered it"
+    );
+    kestrel.advance(RECONSIDER.unsigned_abs()).await;
 
-    assert_eq!(workspaces(&kestrel, 1).await.len(), 1);
+    assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     assert_eq!(
-        firing_of(&kestrel, ASSIGNED, "opened").await.worked_ahead,
+        fired(&kestrel, ASSIGNED, "opened")
+            .await
+            .expect("the held delegation opened")
+            .worked_ahead,
         None
     );
 

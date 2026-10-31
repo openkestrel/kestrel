@@ -9,6 +9,7 @@ mod busy;
 mod capacity;
 mod changes;
 mod cli;
+mod clock;
 mod continuity;
 mod credential;
 mod debuginfo;

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
+use crate::timer::Clock;
 
 /// Where the image puts an Instance's checkouts, and so what every path an operation takes is
 /// relative to.
@@ -316,7 +317,7 @@ fn docker_until(
 ) -> io::Result<Vec<u8>> {
     use std::os::fd::AsRawFd as _;
     use std::os::unix::process::CommandExt as _;
-    if cancel.is_cancelled() || Instant::now() >= deadline {
+    if cancel.is_cancelled() || Clock::System.instant().into_std() >= deadline {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "the Docker request has no time remaining",
@@ -348,7 +349,7 @@ fn docker_until(
         let mut err_closed = false;
         let mut status = None;
         loop {
-            if cancel.is_cancelled() || Instant::now() >= deadline {
+            if cancel.is_cancelled() || Clock::System.instant().into_std() >= deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "the Docker request was cancelled or exceeded its deadline",

@@ -533,7 +533,9 @@ async fn supervised(
     }
     let recorded = store.read().await?.workspaces().supervisor(&name).await?;
     if let Some(recorded) = recorded {
-        if matches!(held, Held::Nothing) && link::on_the_link(recorded.reached_at) {
+        if matches!(held, Held::Nothing)
+            && link::on_the_link(recorded.reached_at, store.clock().now())
+        {
             return Ok(recorded.name);
         }
         if let Some(supervisor) = &recorded.name {

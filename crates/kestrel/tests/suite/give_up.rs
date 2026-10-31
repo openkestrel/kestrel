@@ -2,7 +2,7 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use kestrel::domain::{Exit, SessionId, SessionState, Workspace};
 use kestrel::work::{Report, Reported};
 use reqwest::StatusCode;
@@ -64,7 +64,7 @@ fn dawdling_harness() -> Environment {
 #[tokio::test]
 async fn a_lease_that_passes_while_the_control_plane_is_away_ends_the_harness_and_the_supervisor_redials()
  {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
@@ -107,27 +107,24 @@ async fn a_lease_that_passes_while_the_control_plane_is_away_ends_the_harness_an
     );
 
     // Where the real lease, which the supervisor's bound outlasts, would be by now.
-    stopped
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    stopped.away_for((kestrel::work::LEASE * 2).unsigned_abs());
     let kestrel = stopped.restart().await;
     supervisor.wait_until_it_says("link open after").await;
-    let ended = until(&kestrel, session.id, "was swept", |session| {
-        session.state == SessionState::Ended
-    })
-    .await;
-    assert!(matches!(ended.exit, Some(Exit::Failed { .. })));
+    kestrel
+        .advance((kestrel::work::GRACE + kestrel::work::GAP).unsigned_abs())
+        .await;
+    let ended = kestrel.session(session.id).await;
+    assert!(matches!(ended.exit, Some(Exit::Failed { .. })), "{ended:?}");
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
 async fn an_overdue_lease_accepts_reports_until_the_sweep_ends_its_session() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
-    let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
-    kestrel.lease_until(&session, lapsed).await;
+    kestrel.lapse_unswept().await;
     let link = Link::to(&kestrel.link());
 
     let alive = link
@@ -142,7 +139,7 @@ async fn an_overdue_lease_accepts_reports_until_the_sweep_ends_its_session() {
         )
         .await;
     assert_eq!(alive.status(), StatusCode::ACCEPTED);
-    assert!(kestrel.session(session.id).await.lease_expires_at <= Some(Timestamp::now()));
+    assert!(kestrel.session(session.id).await.lease_expires_at <= Some(kestrel.now()));
 
     let accepted = link
         .report(
@@ -158,18 +155,15 @@ async fn an_overdue_lease_accepts_reports_until_the_sweep_ends_its_session() {
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
     assert!(kestrel.session(session.id).await.started_at.is_some());
 
-    let kestrel = kestrel.kill_and_restart().await;
-    let ended = until(&kestrel, session.id, "was swept", |session| {
-        session.state == SessionState::Ended
-    })
-    .await;
+    kestrel.work_pass().await;
+    let ended = kestrel.session(session.id).await;
     assert!(
         matches!(ended.exit, Some(Exit::Failed { .. })),
         "a session the lease sweep ended did not fail: {:?}",
         ended.exit
     );
 
-    let refused = Link::to(&kestrel.link())
+    let refused = link
         .report(
             &on.instance,
             Some(&on.credential),
@@ -187,7 +181,7 @@ async fn an_overdue_lease_accepts_reports_until_the_sweep_ends_its_session() {
 
 #[tokio::test]
 async fn a_live_session_with_an_overdue_lease_is_renewed_without_dropping_the_link() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
@@ -199,14 +193,13 @@ async fn a_live_session_with_an_overdue_lease_is_renewed_without_dropping_the_li
         .wait_until_it_says(&format!("reported usage for {}", session.id))
         .await;
 
-    kestrel
-        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
+    kestrel.lapse_unswept().await;
+    let lapsed = kestrel.now();
     let renewed = until(
         &kestrel,
         session.id,
         "renewed its overdue lease",
-        |session| session.lease_expires_at > Some(Timestamp::now() + SignedDuration::from_secs(60)),
+        |session| session.lease_expires_at > Some(lapsed + SignedDuration::from_secs(60)),
     )
     .await;
     assert_eq!(renewed.state, SessionState::Working);

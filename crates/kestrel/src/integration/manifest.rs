@@ -103,7 +103,7 @@ pub async fn start(
         phase: Phase::Ready,
         organization: organization.into(),
         name: registration.name.clone(),
-        expires_at: format!("{:.9}", Timestamp::now() + SignedDuration::from_hours(1)),
+        expires_at: format!("{:.9}", store.clock().now() + SignedDuration::from_hours(1)),
         installation_id: None,
         integration: None,
         repository: None,
@@ -170,13 +170,19 @@ fn api(flow: &Flow) -> &str {
     &flow.api
 }
 
-fn unproven(flow: &Flow, operation: &'static str, again: Again, error: Unproven) -> Reason {
+fn unproven(
+    flow: &Flow,
+    operation: &'static str,
+    again: Again,
+    error: Unproven,
+    now: Timestamp,
+) -> Reason {
     match error {
         Unproven::RateLimited { until } => Reason::GithubUnavailable {
             operation,
             integration: flow.registration.name.clone(),
             organization: flow.organization.clone(),
-            retry_after_seconds: Some(until.duration_since(Timestamp::now()).as_secs().max(1)),
+            retry_after_seconds: Some(until.duration_since(now).as_secs().max(1)),
             again,
             message: "GitHub is limiting setup requests; retry after the wait.".into(),
         },
@@ -225,7 +231,15 @@ pub async fn installations(
     let installed = github
         .installations(api(&flow), &credential, page, per_page)
         .await
-        .map_err(|error| unproven(&flow, "list_github_app_installations", Again::Read, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "list_github_app_installations",
+                Again::Read,
+                error,
+                store.clock().now(),
+            )
+        })?;
     if installed
         .iter()
         .any(|installation| installation.app_id != credential.id || installation.id <= 0)
@@ -259,11 +273,19 @@ pub async fn installed(
     github
         .installation(api(&flow), &app(&flow, 0)?, installation)
         .await
-        .map_err(|error| unproven(&flow, "github_app_installed", Again::Request, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "github_app_installed",
+                Again::Request,
+                error,
+                store.clock().now(),
+            )
+        })?;
     let mut tx = store.begin().await?;
     let current = tx.app_flows().read(state).await?;
     configuration(&current, &[Phase::Converted, Phase::SelectRepository])?;
-    if current.status.expires_at.parse::<Timestamp>()? <= Timestamp::now() {
+    if current.status.expires_at.parse::<Timestamp>()? <= store.clock().now() {
         bail!(invalid("flow", "Setup expired; start again."));
     }
     let expected = current.status.phase.clone();
@@ -297,11 +319,27 @@ pub async fn repositories(
     github
         .installation(api(&flow), &credential, credential.installation)
         .await
-        .map_err(|error| unproven(&flow, "list_github_app_repositories", Again::Read, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "list_github_app_repositories",
+                Again::Read,
+                error,
+                store.clock().now(),
+            )
+        })?;
     let installed = github
         .installation_repositories(api(&flow), &credential, page, per_page)
         .await
-        .map_err(|error| unproven(&flow, "list_github_app_repositories", Again::Read, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "list_github_app_repositories",
+                Again::Read,
+                error,
+                store.clock().now(),
+            )
+        })?;
     Ok(wire::GithubAppRepositories {
         page: page.into(),
         total: i64::try_from(installed.total_count)?,
@@ -351,7 +389,15 @@ pub async fn finish(
     let installation = github
         .repository_installation(api(&flow), &credential, &repository)
         .await
-        .map_err(|error| unproven(&flow, "finish_github_app_flow", Again::Request, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "finish_github_app_flow",
+                Again::Request,
+                error,
+                store.clock().now(),
+            )
+        })?;
     if installation != credential.installation {
         bail!(invalid(
             "repository",
@@ -361,7 +407,15 @@ pub async fn finish(
     let named = github
         .installation_repository(api(&flow), &credential, &repository)
         .await
-        .map_err(|error| unproven(&flow, "finish_github_app_flow", Again::Request, error))?;
+        .map_err(|error| {
+            unproven(
+                &flow,
+                "finish_github_app_flow",
+                Again::Request,
+                error,
+                store.clock().now(),
+            )
+        })?;
     if named.id <= 0
         || !named.full_name.eq_ignore_ascii_case(&repository)
         || named.default_branch.is_empty()
@@ -378,7 +432,7 @@ pub async fn finish(
     }
     configuration(&current, &[Phase::SelectRepository])?;
     if current.status.installation_id != read.status.installation_id
-        || current.status.expires_at.parse::<Timestamp>()? <= Timestamp::now()
+        || current.status.expires_at.parse::<Timestamp>()? <= store.clock().now()
     {
         bail!(invalid(
             "flow",
@@ -502,7 +556,7 @@ pub async fn callback(store: &Store, github: &Github, state: &str, code: &str) -
     let mut tx = store.begin().await?;
     let current = tx.app_flows().read(state).await?;
     configuration(&current, &[Phase::Exchanging])?;
-    if status.expires_at.parse::<Timestamp>()? <= Timestamp::now() {
+    if status.expires_at.parse::<Timestamp>()? <= store.clock().now() {
         bail!(invalid("flow", "Setup expired; start again."));
     }
     status.phase = Phase::Converted;

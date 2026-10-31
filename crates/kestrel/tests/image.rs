@@ -7,15 +7,11 @@
 mod support;
 
 use std::path::Path;
-use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
+use kestrel::domain::{Exit, Session, Workspace};
 use support::fixture::Fixture;
 use support::image::{self, Environment};
 use support::{Kestrel, OnTheLink};
-
-const PATIENCE: Duration = Duration::from_secs(30);
 
 const KILLED: i32 = 137;
 
@@ -179,7 +175,7 @@ async fn an_environment_the_image_provisions_dials_out_and_the_control_plane_kno
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
 async fn killing_the_supervisor_in_the_environment_ends_the_session_and_nothing_restarts_it() {
-    let kestrel = Kestrel::boot_reachable_from_an_environment().await;
+    let kestrel = Kestrel::stepped_reachable_from_an_environment().await;
     let (session, on) = a_session(&kestrel).await;
 
     let mut environment = an_environment(&kestrel, &on);
@@ -199,11 +195,10 @@ async fn killing_the_supervisor_in_the_environment_ends_the_session_and_nothing_
         "something brought the supervisor back under its Session"
     );
 
-    kestrel.lease_until(&session, a_moment_ago()).await;
-    let ended = until(&kestrel, session.id, "ended", |session| {
-        session.state == SessionState::Ended
-    })
-    .await;
+    kestrel
+        .advance((kestrel::work::LEASE + kestrel::work::GAP).unsigned_abs())
+        .await;
+    let ended = kestrel.session(session.id).await;
     let Some(Exit::Failed { because }) = ended.exit else {
         panic!(
             "the session ended {:?}, and the supervisor holding its lease out was killed",
@@ -235,32 +230,4 @@ async fn a_session(kestrel: &Kestrel) -> (Session, OnTheLink) {
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     Fixture::acme().model("claude-opus-5").open(kestrel).await
-}
-
-async fn until(
-    kestrel: &Kestrel,
-    session: SessionId,
-    what: &str,
-    ready: impl Fn(&Session) -> bool,
-) -> Session {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-
-    loop {
-        let session = kestrel.session(session).await;
-        if ready(&session) {
-            return session;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the session {} is {} with the exit status {:?}, and never {what}",
-            session.id,
-            session.state,
-            session.exit
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-fn a_moment_ago() -> Timestamp {
-    Timestamp::now() - SignedDuration::from_secs(1)
 }

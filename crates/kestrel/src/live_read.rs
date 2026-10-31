@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::declined::{Declined, Reason};
 use crate::store::Store;
+use crate::timer::Clock;
 
 const ANSWER_BEGUN_WITHIN: Duration = Duration::from_secs(10);
 const SHARED_FOR: Duration = Duration::from_secs(5);
@@ -271,7 +272,7 @@ struct Waiting {
 /// Where the operator's reads meet the supervisor's answers: in the serve role's memory, which
 /// holds every Instance's stream.
 #[derive(Clone, Default)]
-pub struct Reads(Arc<Mutex<Live>>);
+pub struct Reads(Arc<Mutex<Live>>, Clock);
 
 pub struct Stream {
     reads: Reads,
@@ -303,6 +304,10 @@ impl Drop for Awaited {
 }
 
 impl Reads {
+    pub fn on(clock: Clock) -> Self {
+        Self(Arc::default(), clock)
+    }
+
     pub fn connected(&self, instance: &str) -> (mpsc::UnboundedReceiver<Request>, Stream) {
         let (asking, asked) = mpsc::unbounded_channel();
         let mut live = self.0.lock().unwrap();
@@ -360,8 +365,11 @@ impl Reads {
         let key = (instance.to_owned(), read.clone());
         let shared = {
             let mut live = self.0.lock().unwrap();
-            live.shared
-                .retain(|_, shared| shared.get().is_none_or(|(_, at)| at.elapsed() < SHARED_FOR));
+            live.shared.retain(|_, shared| {
+                shared
+                    .get()
+                    .is_none_or(|(_, at)| self.1.instant().duration_since(*at) < SHARED_FOR)
+            });
             Arc::clone(live.shared.entry(key.clone()).or_default())
         };
         let mut raw = None;
@@ -369,7 +377,7 @@ impl Reads {
             .get_or_init(|| async {
                 let (outcome, body) = self.asked(instance, read.clone()).await;
                 raw = body;
-                (outcome, Instant::now())
+                (outcome, self.1.instant())
             })
             .await
             .clone();
@@ -522,14 +530,14 @@ mod tests {
     async fn an_instance_that_takes_a_read_but_never_answers_is_given_up_on() {
         let reads = Reads::default();
         let (mut asked, _stream) = reads.connected("silent");
-        let began = Instant::now();
+        let began = Clock::System.instant();
 
         let Err(error) = reads.read("silent", Read::Files { path: None }).await else {
             panic!("a silent Instance should not answer");
         };
 
         assert!(error.is::<NotAnswering>());
-        assert!(began.elapsed() >= ANSWER_BEGUN_WITHIN);
+        assert!(Clock::System.instant().duration_since(began) >= ANSWER_BEGUN_WITHIN);
         assert!(asked.try_recv().is_ok());
         assert!(reads.0.lock().unwrap().awaiting.is_empty());
     }

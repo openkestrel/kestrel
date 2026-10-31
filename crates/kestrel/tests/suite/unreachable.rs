@@ -7,7 +7,6 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::Timestamp;
 use kestrel::domain::{Session, SessionState, Workspace};
 use support::Kestrel;
 use support::fixture::Fixture;
@@ -107,24 +106,19 @@ async fn an_unreachable_session_is_never_claimed_and_never_becomes_claimable_aga
 
 #[tokio::test]
 async fn a_blocker_failed_by_its_lease_expiring_makes_its_dependent_unreachable() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (blocker, dependent) = a_dependent_blocked_on_an_active_session(&kestrel).await;
 
-    kestrel.lease_until(&blocker, Timestamp::now()).await;
+    kestrel
+        .advance((kestrel::work::LEASE + kestrel::work::GAP).unsigned_abs())
+        .await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let dependent = kestrel.session(dependent.id).await;
-        if dependent.state == SessionState::Unreachable {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the dependent is {:?}, and its blocker's lease expiring never made it unreachable",
-            dependent.state
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    assert_eq!(kestrel.session(blocker.id).await.state, SessionState::Ended);
+    assert_eq!(
+        kestrel.session(dependent.id).await.state,
+        SessionState::Unreachable,
+        "its blocker's lease expiring never made the dependent unreachable"
+    );
 
     kestrel.teardown().await;
 }

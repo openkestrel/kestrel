@@ -66,21 +66,9 @@ async fn the_database_seam_names_the_faults_and_observations_it_reaches_past_the
     let kestrel = Kestrel::boot().await;
     let workspace = Fixture::acme().open(&kestrel).await;
     let session = kestrel.enqueue_session(workspace.id).await;
-    let at: jiff::Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
 
-    kestrel
-        .database()
-        .backdate_transcript(workspace.id, at)
-        .await;
     kestrel.database().end_without_an_exit(&session).await;
 
-    assert!(
-        kestrel
-            .transcript(workspace.id)
-            .await
-            .iter()
-            .all(|entry| entry.appended_at == at)
-    );
     assert_eq!(kestrel.session(session.id).await.exit, None);
     assert!(!kestrel.database().holds_messages(workspace.id).await);
     assert!(kestrel.database().instructions(&session).await.is_empty());

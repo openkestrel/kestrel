@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
-use kestrel::work::{Report, Reported};
+use kestrel::work::{GAP, GRACE, LEASE, Report, Reported};
 use reqwest::StatusCode;
 use serde_json::json;
 use support::fixture::Fixture;
@@ -47,6 +47,22 @@ async fn until(
             session.id,
             session.state,
             session.exit
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn reached_after(kestrel: &Kestrel, instance: &str, after: Timestamp) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+
+    while kestrel
+        .reached_at(instance)
+        .await
+        .is_none_or(|reached| reached <= after)
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the supervisor of {instance} never reached the link after {after}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -164,16 +180,11 @@ async fn the_environment_comes_back_on_its_own_carrying_the_cursor_it_held() {
     kestrel.teardown().await;
 }
 
-/// A lease due sooner than a real one, and further off than the Environment's next heartbeat.
-fn shortened() -> Timestamp {
-    Timestamp::now() + SignedDuration::from_secs(6)
-}
-
-/// A second Session whose lease is already up when the control plane comes back, so the sweep
-/// that reaps it is observably the same sweep that left the live one alone.
+/// A second Session whose lease is up once the control plane comes back, so the sweep that reaps
+/// it is observably the same sweep that left the live one alone.
 #[tokio::test]
 async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconnecting() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, supervisor) = working(&kestrel, &workspace, Script::Dawdles).await;
     let abandoned = kestrel
@@ -184,19 +195,18 @@ async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconne
                 .id,
         )
         .await;
-
-    let stopped = kestrel.kill().await;
-    let shortened = shortened();
-    stopped.lease_until(&session, shortened).await;
-    stopped
-        .lease_until(&abandoned, Timestamp::now() - SignedDuration::from_secs(1))
-        .await;
-    let kestrel = stopped.restart().await;
-
-    let expired = until(&kestrel, abandoned.id, "was swept", |session| {
-        session.state == SessionState::Ended
+    let lapses = kestrel.session(abandoned.id).await.lease_expires_at;
+    kestrel.advance((LEASE - GAP).unsigned_abs()).await;
+    let renewed = until(&kestrel, session.id, "had its lease held out", |session| {
+        session.lease_expires_at > lapses
     })
-    .await;
+    .await
+    .lease_expires_at;
+
+    let kestrel = kestrel.kill().await.restart().await;
+    kestrel.advance((GAP + GAP).unsigned_abs()).await;
+
+    let expired = kestrel.session(abandoned.id).await;
     assert_eq!(
         expired.exit,
         Some(Exit::Failed {
@@ -214,7 +224,7 @@ async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconne
         &kestrel,
         session.id,
         "had its lease held out again",
-        |session| session.lease_expires_at > Some(shortened),
+        |session| session.lease_expires_at > renewed,
     )
     .await;
     assert_eq!(held.state, SessionState::Working);
@@ -331,7 +341,7 @@ async fn a_report_that_changes_the_sessions_record_and_is_not_numbered_is_refuse
 
 #[tokio::test]
 async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_supervisor() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel).await;
     let (healthy, supervisor) = working(&kestrel, &workspace, Script::Speaks).await;
     until(&kestrel, healthy.id, "answered and settled", |session| {
@@ -360,31 +370,29 @@ async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_super
         session.state == SessionState::Waiting
     })
     .await;
+    kestrel.work_pass().await;
+    let start = kestrel.now();
     let stopped = kestrel.kill().await;
     lost_supervisor.destroy();
     forgetful.wait_until_it_says("let the session").await;
-    let start = Timestamp::now() - SignedDuration::from_mins(9);
-    stopped.database().last_lease_sweep(start).await;
-    let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
-    stopped.lease_until(&healthy, lapsed).await;
-    stopped.lease_until(&lost, lapsed).await;
-    stopped.lease_until(&forgotten, lapsed).await;
+    stopped.away_for(Duration::from_secs(9 * 60));
     let kestrel = stopped.restart().await;
+    kestrel.work_pass().await;
+    let end = kestrel.now();
+    kestrel.advance(Duration::from_secs(1)).await;
     let held = until(&kestrel, healthy.id, "renewed its lease", |session| {
-        session.lease_expires_at > Some(Timestamp::now() + SignedDuration::from_secs(60))
+        session.lease_expires_at > Some(kestrel.now() + SignedDuration::from_secs(60))
     })
     .await;
     assert_eq!(held.state, SessionState::Waiting);
+    reached_after(&kestrel, &on.instance, end).await;
     let graced = kestrel.session(lost.id).await;
     assert_eq!(graced.state, SessionState::Waiting);
-    let deadline = graced.lease_expires_at.unwrap();
-    assert!(deadline > Timestamp::now());
-    let ended = until(&kestrel, lost.id, "failed after grace", |session| {
-        session.state == SessionState::Ended
-    })
-    .await;
-    assert!(Timestamp::now() >= deadline);
-    let end = deadline - SignedDuration::from_secs(30);
+    assert_eq!(graced.lease_expires_at, Some(end + GRACE));
+
+    kestrel.advance(GRACE.unsigned_abs()).await;
+
+    let ended = kestrel.session(lost.id).await;
     assert_eq!(
         ended.exit,
         Some(Exit::Failed {
@@ -393,13 +401,7 @@ async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_super
             )
         })
     );
-    let forgotten = until(
-        &kestrel,
-        forgotten.id,
-        "failed without renewing the session it let go",
-        |session| session.state == SessionState::Ended,
-    )
-    .await;
+    let forgotten = kestrel.session(forgotten.id).await;
     assert_eq!(
         forgotten.exit,
         Some(Exit::Failed {

@@ -159,7 +159,7 @@ pub async fn hold(
             &profile,
             entry,
             secret,
-            &Authentication::unchecked(Source::GenericWrite),
+            &Authentication::unchecked(Source::GenericWrite, store.clock().now()),
         )
         .await?;
     tx.commit().await?;

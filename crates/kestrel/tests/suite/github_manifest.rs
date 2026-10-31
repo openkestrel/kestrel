@@ -69,6 +69,8 @@ async fn select(kestrel: &Kestrel, stub: &GithubStub, client: &Client, state: &s
     repository(stub);
 }
 
+const FLOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 #[tokio::test]
 async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
     for webhook in [false, true] {
@@ -201,7 +203,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
         assert!(!records.to_string().contains("manifest-webhook-secret"));
         assert!(!records.to_string().contains("PRIVATE KEY"));
         let integrations = kestrel.integrations("acme").await;
-        kestrel::integration::github::Github::unfenced()
+        kestrel::integration::github::Github::unfenced(&kestrel::timer::Clock::System)
             .unwrap()
             .issue(&integrations[0], 1)
             .await
@@ -269,7 +271,7 @@ async fn unknown_expired_and_concurrent_callbacks_cannot_exchange_twice() {
             .count(),
         1
     );
-    kestrel.database().expire_github_app_flows().await;
+    kestrel.away_for(FLOW);
     assert_eq!(
         request().await.unwrap().status(),
         StatusCode::UNPROCESSABLE_ENTITY
@@ -688,7 +690,7 @@ async fn cancellation_and_expiry_erase_temporary_material_and_never_register() {
                 .await
                 .unwrap()
         } else {
-            kestrel.database().expire_github_app_flows().await;
+            kestrel.away_for(FLOW);
             client
                 .get(&endpoint)
                 .send()

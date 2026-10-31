@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use tokio::time::Instant;
 
 use crate::domain::{OrganizationId, Session, SessionId, Workspace, WorkspaceId};
+use crate::timer::Clock;
 
 const COALESCE: Duration = Duration::from_millis(250);
 /// How many notices one subscriber may lag before it is told to resync instead.
@@ -90,6 +91,7 @@ pub struct Notices {
 struct Hub {
     state: Mutex<State>,
     flushing: AtomicBool,
+    clock: Clock,
 }
 
 #[derive(Default)]
@@ -99,6 +101,15 @@ struct State {
 }
 
 impl Notices {
+    pub fn on(clock: Clock) -> Self {
+        Self {
+            hub: Arc::new(Hub {
+                clock,
+                ..Hub::default()
+            }),
+        }
+    }
+
     pub fn subscribe(&self, organization: OrganizationId) -> Subscription {
         let mut state = self.hub.state.lock().unwrap();
         let sender = state
@@ -117,7 +128,7 @@ impl Notices {
         if touched.is_empty() {
             return;
         }
-        let at = Instant::now() + COALESCE;
+        let at = self.hub.clock.instant() + COALESCE;
 
         let start = {
             let mut state = self.hub.state.lock().unwrap();
@@ -161,10 +172,10 @@ async fn flush(notices: Notices) {
             continue;
         };
 
-        tokio::time::sleep_until(deadline).await;
+        tokio::time::sleep(deadline.saturating_duration_since(notices.hub.clock.instant())).await;
 
         let mut state = notices.hub.state.lock().unwrap();
-        let now = Instant::now();
+        let now = notices.hub.clock.instant();
         let due = state
             .pending
             .iter()

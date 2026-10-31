@@ -29,7 +29,7 @@ pub async fn hold(store: &Store, organization: &str, variable: &str, secret: &st
             organization.id,
             variable,
             secret,
-            &Authentication::unchecked(Source::GenericWrite),
+            &Authentication::unchecked(Source::GenericWrite, store.clock().now()),
         )
         .await?;
     tx.commit().await?;

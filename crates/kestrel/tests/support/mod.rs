@@ -70,6 +70,7 @@ use kestrel::scheduling;
 use kestrel::sign_in::check::Providers;
 use kestrel::sign_in::credential_use::{self, CredentialUse};
 use kestrel::store::Store;
+use kestrel::timer::Clock;
 use kestrel::timer::Wake;
 use kestrel::trigger::{self, Against, Asked, Tested};
 use kestrel::work;
@@ -226,6 +227,15 @@ pub enum Pace {
     Stepped,
 }
 
+impl Pace {
+    fn clock(self) -> Clock {
+        match self {
+            Self::Live => Clock::System,
+            Self::Stepped => Clock::manual(),
+        }
+    }
+}
+
 enum WorkRole {
     /// Running inside `roles`, beside serve.
     AllInOne,
@@ -285,6 +295,24 @@ pub struct Provisions {
 }
 
 impl Provisions {
+    /// No supervisor, and `path` ahead of the rest of `PATH` for the programs a relay runs.
+    fn programs(path: &Path) -> Self {
+        let mut paths = vec![path.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        Self {
+            driver: Driver::LocalExec(
+                LocalExec::running("/usr/bin/false")
+                    .with_path(std::env::join_paths(paths).unwrap()),
+            ),
+            harnesses: Vec::new(),
+            max_active_sessions: NonZeroUsize::new(2).unwrap(),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }
+    }
+
     fn local(supervisor: &Path, harnesses: &[(&str, &str)], maximum: usize) -> Self {
         Self {
             driver: Driver::LocalExec(LocalExec::running(supervisor)),
@@ -348,6 +376,7 @@ pub struct Stopped {
     environment: Option<Provisions>,
     follow_lease: Duration,
     pace: Pace,
+    clock: Clock,
 }
 
 impl Kestrel {
@@ -377,6 +406,21 @@ impl Kestrel {
         .await
     }
 
+    pub async fn stepped_reachable_from_an_environment() -> Self {
+        Self::boot_paced(
+            TempDir::new().expect("a temporary data directory"),
+            Listen {
+                link: "0.0.0.0:0".parse().expect("every interface"),
+                operator: LOOPBACK,
+            },
+            None,
+            kestrel::presence::LEASE,
+            Pace::Stepped,
+            Pace::Stepped.clock(),
+        )
+        .await
+    }
+
     pub async fn boot_with_the_operator_beyond_loopback() -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         Self::boot_against(
@@ -400,20 +444,15 @@ impl Kestrel {
     }
 
     pub async fn dispatching_with_programs(path: &Path) -> Self {
-        let mut paths = vec![path.to_path_buf()];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        Self::booted(Some(Provisions {
-            driver: Driver::LocalExec(
-                LocalExec::running("/usr/bin/false")
-                    .with_path(std::env::join_paths(paths).unwrap()),
-            ),
-            harnesses: Vec::new(),
-            max_active_sessions: NonZeroUsize::new(2).unwrap(),
-            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
-            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
-        }))
+        Self::booted(Some(Provisions::programs(path))).await
+    }
+
+    pub async fn stepped_dispatching_with_programs(path: &Path) -> Self {
+        Self::booted_at_pace(
+            Some(Provisions::programs(path)),
+            kestrel::presence::LEASE,
+            Pace::Stepped,
+        )
         .await
     }
 
@@ -516,6 +555,7 @@ impl Kestrel {
             environment,
             follow_lease,
             pace,
+            pace.clock(),
         )
         .await
     }
@@ -548,6 +588,7 @@ impl Kestrel {
             client_url(),
             Images::default(),
             Pace::Live,
+            Clock::System,
         )
         .await
     }
@@ -574,6 +615,7 @@ impl Kestrel {
             client,
             images,
             Pace::Live,
+            Clock::System,
         )
         .await
     }
@@ -584,7 +626,15 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
     ) -> Self {
-        Self::boot_paced(data_dir, listen, environment, follow_lease, Pace::Live).await
+        Self::boot_paced(
+            data_dir,
+            listen,
+            environment,
+            follow_lease,
+            Pace::Live,
+            Clock::System,
+        )
+        .await
     }
 
     async fn boot_paced(
@@ -593,6 +643,7 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
         pace: Pace,
+        clock: Clock,
     ) -> Self {
         Self::boot_checking(
             data_dir,
@@ -603,6 +654,7 @@ impl Kestrel {
             client_url(),
             Images::default(),
             pace,
+            clock,
         )
         .await
     }
@@ -620,8 +672,9 @@ impl Kestrel {
         client: url::Url,
         images: Images,
         pace: Pace,
+        clock: Clock,
     ) -> Self {
-        let store = Store::open(data_dir.path())
+        let store = Store::open_on(data_dir.path(), clock.clone())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
@@ -672,8 +725,9 @@ impl Kestrel {
         )
     }
 
-    /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
-    /// lapse until it restarts as a whole control plane.
+    /// Serves the link with no work role behind it, on a clock that moves only as the test moves
+    /// it, so nothing sweeps a lease a test has let lapse until it restarts as a whole control
+    /// plane.
     pub async fn boot_serving_alone() -> Self {
         Self::boot_serving_at_github(kestrel::integration::github::API).await
     }
@@ -684,7 +738,7 @@ impl Kestrel {
 
     pub async fn boot_serving_with_webhook_base(api: &str, base: Option<String>) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
-        let store = Store::open(data_dir.path())
+        let store = Store::open_on(data_dir.path(), Clock::manual())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
@@ -766,6 +820,37 @@ impl Kestrel {
                 )
             }
         }
+    }
+
+    /// Time the control plane was present for: a work pass at least every `GAP` of it, so the
+    /// lease sweep never reads it as time it was away (ADR-0059).
+    pub async fn advance(&self, by: Duration) {
+        let every = kestrel::work::GAP.unsigned_abs();
+        let mut left = by;
+        while !left.is_zero() {
+            let step = left.min(every);
+            self.store.clock().advance(step);
+            self.work_pass().await;
+            left -= step;
+        }
+    }
+
+    /// To the moment a lease taken now lapses, with no pass at that moment, so the lapse is there
+    /// and not yet swept.
+    pub async fn lapse_unswept(&self) {
+        self.advance((kestrel::work::LEASE - kestrel::work::GAP).unsigned_abs())
+            .await;
+        self.away_for(kestrel::work::GAP.unsigned_abs());
+    }
+
+    /// Time the control plane was away for, which its next lease sweep reads as a gap
+    /// (ADR-0054).
+    pub fn away_for(&self, by: Duration) {
+        self.store.clock().advance(by);
+    }
+
+    pub fn now(&self) -> Timestamp {
+        self.store.clock().now()
     }
 
     pub async fn go_live(&self) {
@@ -1069,7 +1154,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::replace_private_key(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
             private_key,
@@ -1086,7 +1171,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::rotate_webhook_secret(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
             revision,
@@ -1105,7 +1190,7 @@ impl Kestrel {
         tokio::spawn(async move {
             integration::rotate_webhook_secret(
                 &store,
-                &Github::unfenced()?,
+                &Github::unfenced(store.clock())?,
                 &organization,
                 &name,
                 None,
@@ -1121,7 +1206,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::resume_webhook_secret_rotation(
             &self.store,
-            &Github::unfenced()?,
+            &Github::unfenced(self.store.clock())?,
             organization,
             name,
         )
@@ -2500,6 +2585,19 @@ impl Kestrel {
             .expect("the workspace's instance should read")
     }
 
+    /// When the supervisor of `instance` last reached the link, by the control plane's clock.
+    pub async fn reached_at(&self, instance: &str) -> Option<Timestamp> {
+        self.store
+            .read()
+            .await
+            .expect("a read")
+            .workspaces()
+            .supervisor(instance)
+            .await
+            .expect("the supervisor should read")
+            .and_then(|supervisor| supervisor.reached_at)
+    }
+
     pub async fn interrupt(
         &self,
         session: SessionId,
@@ -2547,38 +2645,6 @@ impl Kestrel {
         link::start(&self.store, session, harness).await
     }
 
-    /// A lease that is up when the caller says rather than when a real one would be. The only
-    /// way to watch a sweep without waiting a whole lease out.
-    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .hold_lease(session, expires_at)
-            .await
-            .expect("the lease should hold");
-        tx.commit().await.expect("the lease should commit");
-    }
-
-    /// Backdates when a Workspace was last active, the way `lease_until` backdates a lease: the
-    /// only way to watch the idle sweep without waiting the window out.
-    pub async fn last_active(&self, workspace: &Workspace, at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .record_active(workspace.organization.id, workspace.id, at)
-            .await
-            .expect("the workspace should record when it was last active");
-        tx.commit().await.expect("the record should commit");
-    }
-
-    /// The only way to watch the periodic sweep find what a missed event would have.
-    pub async fn last_considered(&self, event: EventRecordId, at: Timestamp) {
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.triggers()
-            .considered(event, at)
-            .await
-            .expect("the held firing should record when it was considered");
-        tx.commit().await.expect("the record should commit");
-    }
-
     /// Simulates the process going away: every role and every stream it was holding open stops
     /// at once, and the store is dropped rather than closed.
     pub async fn kill(self) -> Stopped {
@@ -2589,6 +2655,7 @@ impl Kestrel {
             live.abort();
             let _ = live.await;
         }
+        let clock = self.store.clock().clone();
         drop(self.store);
 
         Stopped {
@@ -2598,6 +2665,7 @@ impl Kestrel {
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
+            clock,
         }
     }
 
@@ -2625,6 +2693,7 @@ impl Kestrel {
         )
         .await;
         self.cleanup.armed = false;
+        let clock = self.store.clock().clone();
         drop(self.store);
 
         Stopped {
@@ -2634,6 +2703,7 @@ impl Kestrel {
             environment: self.environment,
             follow_lease: self.follow_lease,
             pace: self.pace,
+            clock,
         }
     }
 }
@@ -2683,6 +2753,10 @@ impl Stopped {
         Database::at(self.data_dir.path())
     }
 
+    pub fn away_for(&self, by: Duration) {
+        self.clock.advance(by);
+    }
+
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
         Kestrel::boot_paced(
@@ -2691,6 +2765,7 @@ impl Stopped {
             self.environment,
             self.follow_lease,
             self.pace,
+            self.clock,
         )
         .await
     }
@@ -2720,12 +2795,13 @@ impl Stopped {
             }),
             self.follow_lease,
             self.pace,
+            self.clock,
         )
         .await
     }
 
     pub async fn session(&self, id: SessionId) -> Session {
-        let store = Store::open(self.data_dir.path())
+        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
             .await
             .expect("the database should still be there");
 
@@ -2734,24 +2810,10 @@ impl Stopped {
             .expect("the session should show")
     }
 
-    /// A due time set while nothing is keeping time, so what fires it afterwards is a control
-    /// plane that could only have read it back.
-    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
-        let store = Store::open(self.data_dir.path())
-            .await
-            .expect("the database should still be there");
-        let mut tx = store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .hold_lease(session, expires_at)
-            .await
-            .expect("the lease should hold");
-        tx.commit().await.expect("the lease should commit");
-    }
-
     /// Reaches the durable record while nothing is serving it, which is the only way to make
     /// an instruction that an Environment provably could not have been handed as it was sent.
     pub async fn instruct(&self, session: &Session, instruction: Instruction) {
-        let store = Store::open(self.data_dir.path())
+        let store = Store::open_on(self.data_dir.path(), self.clock.clone())
             .await
             .expect("the database should still be there");
         link::instruct(&store, session, instruction)

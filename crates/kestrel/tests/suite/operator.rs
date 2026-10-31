@@ -315,6 +315,9 @@ fn failed(finished: &client::Finished) -> &str {
     &finished.err
 }
 
+/// Past the 30 days a Transcript's narration and detail are kept.
+const PAST_RETENTION: Duration = Duration::from_secs(31 * 24 * 60 * 60);
+
 /// Someone who opens the operator port in a browser learns it is the API, and where the Client is.
 #[tokio::test]
 async fn the_operator_root_names_the_api_and_the_browser_client() {
@@ -6425,17 +6428,8 @@ async fn queue_and_dispatch_agree_for_held_messages_first_briefs_and_queued_sess
 
 #[tokio::test]
 async fn queue_and_dispatch_preserve_input_priority_at_equal_timestamps() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let requests = mixed_slot_requests(&kestrel).await;
-    let at: jiff::Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
-    let database = kestrel.database();
-    database
-        .backdate_transcript(requests[1].workspace, at)
-        .await;
-    database
-        .receive_held_messages_at(requests[0].workspace, at)
-        .await;
-    database.enqueue_at(&requests[2], at).await;
     assert_queue_dispatch_order(&kestrel, &requests).await;
     kestrel.teardown().await;
 }
@@ -7506,7 +7500,7 @@ async fn transcript_payloads_and_their_entry_roll_back_when_the_payload_write_fa
 
 #[tokio::test]
 async fn transcript_payloads_keep_json_plans_and_completion_metadata() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;
     let on = kestrel.on_the_link(&session).await;
     let link = support::link_client::Link::to(&kestrel.link());
@@ -7546,14 +7540,7 @@ async fn transcript_payloads_keep_json_plans_and_completion_metadata() {
         response.bytes().await.unwrap().as_ref(),
         serde_json::to_vec(&entries).unwrap()
     );
-    kestrel
-        .database()
-        .backdate_entry(
-            session.workspace,
-            plan["seq"].as_i64().unwrap(),
-            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24),
-        )
-        .await;
+    kestrel.away_for(PAST_RETENTION);
     kestrel
         .retain_transcript()
         .await
@@ -7681,7 +7668,7 @@ async fn retention_stream(kestrel: &Kestrel, workspace: &str, query: &str) -> St
 
 #[tokio::test]
 async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_shared_state() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;
     let on = kestrel.on_the_link(&session).await;
     let link = support::link_client::Link::to(&kestrel.link());
@@ -7698,11 +7685,7 @@ async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_
     kestrel.stop_session(session.id).await;
     kestrel.release_instance(session.workspace).await;
     kestrel.seal_workspace(session.workspace).await;
-    let old = "2020-02-01T00:00:00Z";
-    kestrel
-        .database()
-        .backdate_transcript(session.workspace, old.parse().unwrap())
-        .await;
+    kestrel.away_for(PAST_RETENTION);
     let before = payload_entries(&kestrel, &workspace).await;
     let work: Vec<_> = before
         .iter()
@@ -7720,17 +7703,17 @@ async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_
         }
         assert_eq!(after["seq"], before["seq"]);
         assert_eq!(after["kind"], before["kind"]);
-        assert_eq!(after["appended_at"], old);
+        assert_eq!(after["appended_at"], before["appended_at"]);
         assert_eq!(after["session_id"], Value::Null);
         assert_eq!(after["entry"].as_object().unwrap().len(), 2);
         assert_eq!(after["entry"]["type"], "expired");
-        assert!(
+        assert_eq!(
             after["entry"]["expired_at"]
                 .as_str()
                 .unwrap()
                 .parse::<jiff::Timestamp>()
-                .unwrap()
-                <= jiff::Timestamp::now()
+                .unwrap(),
+            kestrel.now()
         );
     }
     let detail = retention_stream(&kestrel, &workspace, "kinds=detail&summaries=false").await;
@@ -7821,7 +7804,7 @@ async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_
 
 #[tokio::test]
 async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;
     let on = kestrel.on_the_link(&session).await;
     let link = support::link_client::Link::to(&kestrel.link());
@@ -7835,10 +7818,7 @@ async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() 
         report["seq"] = json!(seq + 1);
         assert_eq!(link.report_body(&on.instance, Some(&on.credential), &report).await.status(), StatusCode::ACCEPTED);
     }
-    kestrel
-        .database()
-        .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
-        .await;
+    kestrel.away_for(PAST_RETENTION);
     let before = payload_entries(&kestrel, &workspace).await;
     kestrel.database().refuse_retention().await;
     assert!(kestrel.retain_transcript().await.is_err());
@@ -7882,7 +7862,7 @@ async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() 
 
 #[tokio::test]
 async fn retention_continues_bounded_batches_and_uses_append_time() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;
     let on = kestrel.on_the_link(&session).await;
     let link = support::link_client::Link::to(&kestrel.link());
@@ -7896,21 +7876,9 @@ async fn retention_continues_bounded_batches_and_uses_append_time() {
             StatusCode::ACCEPTED
         );
     }
-    kestrel
-        .database()
-        .backdate_transcript(
-            session.workspace,
-            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(29 * 24),
-        )
-        .await;
+    kestrel.away_for(Duration::from_secs(29 * 24 * 60 * 60));
     assert_eq!(kestrel.retain_transcript().await.unwrap(), 0);
-    kestrel
-        .database()
-        .backdate_transcript(
-            session.workspace,
-            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24),
-        )
-        .await;
+    kestrel.away_for(Duration::from_secs(2 * 24 * 60 * 60));
     let fresh = json!({"session":session.id,"seq":1002,"kind":"thought","text":"appended recently despite ancient completion","completion":completion});
     assert_eq!(
         link.report_body(&on.instance, Some(&on.credential), &fresh)
@@ -7987,7 +7955,7 @@ async fn retention_continues_bounded_batches_and_uses_append_time() {
 
 #[tokio::test]
 async fn retention_work_role_finds_due_entries_on_startup() {
-    let kestrel = Kestrel::boot_serving_alone().await;
+    let kestrel = Kestrel::stepped().await;
     let (workspace, session) = an_open_workspace(&kestrel, 0).await;
     let on = kestrel.on_the_link(&session).await;
     let link = support::link_client::Link::to(&kestrel.link());
@@ -7998,11 +7966,9 @@ async fn retention_work_role_finds_due_entries_on_startup() {
             .status(),
         StatusCode::ACCEPTED
     );
-    kestrel
-        .database()
-        .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
-        .await;
+    kestrel.away_for(PAST_RETENTION);
     let kestrel = kestrel.kill_and_restart().await;
+    kestrel.go_live().await;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if payload_entries(&kestrel, &workspace)

@@ -20,6 +20,7 @@ use crate::declined::{Constraint, Next, Reason, Resource, Step};
 use crate::domain::{OrganizationId, SubscriptionProfileId};
 use crate::profile::Entry;
 use crate::store::{self, Store, Tx};
+use crate::timer::Clock;
 
 pub const START: &str = "start_sign_in_relay";
 pub const READ: &str = "read_sign_in_relay";
@@ -151,13 +152,13 @@ pub async fn start(
     };
     let entry = filled(offered)?;
     if let Some(mut current) = tx.relays().active(profile.id, &entry).await? {
-        if current.view.deadline.parse::<Timestamp>()? <= Timestamp::now() {
+        if current.view.deadline.parse::<Timestamp>()? <= store.clock().now() {
             tx.relays().update(&mut current, expired()).await?;
         } else {
             bail!(current.conflict(START));
         }
     }
-    let now = Timestamp::now();
+    let now = store.clock().now();
     let attempt = Attempt {
         organization: organization.id,
         profile: profile.id,
@@ -216,7 +217,7 @@ async fn scoped(
         .as_ref()
         .map(|at| at.parse::<Timestamp>())
         .transpose()?
-        .is_some_and(|at| Timestamp::now().as_second() - at.as_second() >= 86400)
+        .is_some_and(|at| tx.now().as_second() - at.as_second() >= 86400)
     {
         bail!(Reason::Expired {operation: READ, resource: Resource::SignInRelay, reference: id.to_owned(), organization: Some(organization.name),
             next: Next::inspect(Resource::SignInRelay, id), message: "this sign-in relay's retained state has expired; inspect saved sign-ins before starting another".to_owned() });
@@ -314,8 +315,7 @@ fn expired() -> wire::SignInRelayProgress {
 }
 
 async fn expire(tx: &mut Tx<'_>, attempt: &mut Attempt) -> Result<()> {
-    if !terminal(&attempt.view.progress)
-        && attempt.view.deadline.parse::<Timestamp>()? <= Timestamp::now()
+    if !terminal(&attempt.view.progress) && attempt.view.deadline.parse::<Timestamp>()? <= tx.now()
     {
         tx.relays().update(attempt, expired()).await?;
     }
@@ -395,7 +395,7 @@ async fn complete(store: &Store, id: &str, material: &str) -> Result<()> {
         let authentication = Authentication {
             state: State::LoginCompleted,
             source: Source::Relay,
-            observed_at: Timestamp::now(),
+            observed_at: store.clock().now(),
             provider_check: None,
         };
         let held = tx
@@ -539,7 +539,7 @@ async fn drive(
 ) -> Result<Option<String>> {
     let method = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?;
     let mut instance = provision(store, driver, attempt, shutdown).await?;
-    let remaining = remaining(attempt)?;
+    let remaining = remaining(attempt, store.clock().now())?;
     let relayed = async {
         match method.relay {
             Some(wire::SignInMethodRelay::ClaudeSetupToken) => {
@@ -596,7 +596,7 @@ async fn authorize_device(
     };
     let mut terminal = instance.terminal(codex::LOGIN)?;
     let mut decoder = codex::Decoder::new();
-    let prompt_by = tokio::time::Instant::now() + PROMPT_WAIT;
+    let prompt_by = store.clock().instant() + PROMPT_WAIT;
     let mut prompted = false;
     let mut bytes = 0;
     let mut output_closed = false;
@@ -625,7 +625,7 @@ async fn authorize_device(
             },
             () = tokio::time::sleep(POLL) => {}
         }
-        if !prompted && current.state() == "starting" && tokio::time::Instant::now() >= prompt_by {
+        if !prompted && current.state() == "starting" && store.clock().instant() >= prompt_by {
             bail!(Unusable(
                 "the vendor showed no device code Kestrel could read; retry, or import the auth.json a Codex sign-in writes instead"
             ));
@@ -661,13 +661,13 @@ async fn authorize_device(
     Ok(Some(material))
 }
 
-fn remaining(attempt: &Attempt) -> Result<Duration> {
+fn remaining(attempt: &Attempt, now: Timestamp) -> Result<Duration> {
     Ok(Duration::try_from(
         attempt
             .view
             .deadline
             .parse::<Timestamp>()?
-            .duration_since(Timestamp::now()),
+            .duration_since(now),
     )?)
 }
 
@@ -693,8 +693,8 @@ async fn provision(
     attempt: &Attempt,
     shutdown: &CancellationToken,
 ) -> Result<crate::compute::Instance> {
-    let remaining = remaining(attempt)?;
-    let deadline = std::time::Instant::now() + remaining;
+    let remaining = remaining(attempt, store.clock().now())?;
+    let deadline = Clock::System.instant().into_std() + remaining;
     let cancel = shutdown.child_token();
     let _cancel_on_drop = cancel.clone().drop_guard();
     let driver = driver.clone();
@@ -718,7 +718,10 @@ async fn destroy(driver: &Driver, id: &str) -> Result<()> {
     let driver = driver.clone();
     let name = driver.instance_for(instance(id));
     tokio::task::spawn_blocking(move || {
-        driver.destroy_until(&name, std::time::Instant::now() + Duration::from_secs(10))
+        driver.destroy_until(
+            &name,
+            Clock::System.instant().into_std() + Duration::from_secs(10),
+        )
     })
     .await??;
     Ok(())

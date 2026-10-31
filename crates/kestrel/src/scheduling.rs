@@ -272,13 +272,10 @@ async fn dispatching(
         {
             Admission::Available => {
                 let unbriefed = matches!(evaluation.request, Request::Provision);
+                let lease_until = tx.now() + work::LEASE;
                 if let Some(session) = tx
                     .workspaces()
-                    .claim_session(
-                        &candidate.session,
-                        Timestamp::now() + work::LEASE,
-                        unbriefed,
-                    )
+                    .claim_session(&candidate.session, lease_until, unbriefed)
                     .await?
                 {
                     return Ok(Some(Occupied::Claimed(session)));
@@ -530,7 +527,7 @@ mod tests {
             .unwrap();
         let first = credential_use::tests::session(&mut tx, "rotating").await;
         tx.workspaces()
-            .claim_session(&first, Timestamp::now() + work::LEASE, false)
+            .claim_session(&first, store.clock().now() + work::LEASE, false)
             .await
             .unwrap()
             .unwrap();

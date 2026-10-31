@@ -275,7 +275,7 @@ pub(crate) mod tests {
         let first = session(&mut tx, "rotating").await;
         let first = tx
             .workspaces()
-            .claim_session(&first, jiff::Timestamp::now() + crate::work::LEASE, false)
+            .claim_session(&first, store.clock().now() + crate::work::LEASE, false)
             .await
             .unwrap()
             .unwrap();
@@ -305,7 +305,7 @@ pub(crate) mod tests {
         let mut tx = store.begin().await.unwrap();
         let pending = session(&mut tx, "parallel").await;
         tx.workspaces()
-            .claim_session(&pending, jiff::Timestamp::now() + crate::work::LEASE, false)
+            .claim_session(&pending, store.clock().now() + crate::work::LEASE, false)
             .await
             .unwrap()
             .unwrap();

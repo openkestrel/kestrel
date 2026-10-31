@@ -122,7 +122,7 @@ pub async fn start(
         state: TestState::Pending,
         outcome: None,
         message: None,
-        created_at: Timestamp::now(),
+        created_at: store.clock().now(),
         started_at: None,
         finished_at: None,
     };

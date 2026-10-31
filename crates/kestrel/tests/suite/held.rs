@@ -6,7 +6,6 @@ use crate::support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionState, Workspace, WorkspaceState};
 use support::Kestrel;
 use support::environment::Environment;
@@ -39,11 +38,18 @@ fn working(shell: &str) -> Environment {
 
 #[cfg(unix)]
 async fn dispatching_to(harness: &Environment) -> Kestrel {
-    Kestrel::dispatching_to(
-        supervisor::binary(),
+    on_the_clock(
         &format!("\"{}\"", harness.path().display()),
+        supervisor::binary(),
     )
     .await
+}
+
+/// The work role runs live, on a clock that moves only when a day passes.
+async fn on_the_clock(harness: &str, supervisor: &std::path::Path) -> Kestrel {
+    let kestrel = Kestrel::stepped_dispatching_to(supervisor, harness).await;
+    kestrel.go_live().await;
+    kestrel
 }
 
 /// Ended, so nothing but what its checkout holds keeps its Workspace. A Session that answers rather than failing waits between turns until something stops it
@@ -71,8 +77,10 @@ async fn over(kestrel: &Kestrel, workspace: &Workspace) -> Session {
     }
 }
 
-fn a_day_ago() -> Timestamp {
-    Timestamp::now() - SignedDuration::from_hours(25)
+/// Too long to step a pass at a time, so the control plane was away for it; what a gap does to a
+/// lease is not what these tests watch.
+fn a_day_passes(kestrel: &Kestrel) {
+    kestrel.away_for(Duration::from_secs(25 * 60 * 60));
 }
 
 async fn eventually(what: &str, done: impl AsyncFn() -> bool) {
@@ -118,7 +126,7 @@ async fn clean_research_work_seals_when_idle_and_its_instance_is_archived() {
     let instance = session.instance.expect("an instance");
     assert!(kestrel.held_instances("acme").await.is_empty());
 
-    kestrel.last_active(&workspace, a_day_ago()).await;
+    a_day_passes(&kestrel);
 
     let workspace_id = workspace.id;
     eventually("the idle sweep sealing the workspace", async || {
@@ -164,7 +172,7 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
     assert_eq!(session.exit, Some(Exit::Succeeded));
     let instance = session.instance.expect("an instance");
 
-    kestrel.last_active(&workspace, a_day_ago()).await;
+    a_day_passes(&kestrel);
     stays_open(&kestrel, &workspace).await;
 
     let held = kestrel.held_instances("acme").await;
@@ -263,13 +271,13 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
 #[tokio::test]
 async fn a_session_that_fails_without_reporting_its_checkout_holds_its_instance() {
     let environment = Environment::executing("exit 3");
-    let kestrel = Kestrel::dispatching(environment.path()).await;
+    let kestrel = on_the_clock(&scripted_agent::playing(Script::Speaks), environment.path()).await;
     let workspace = a_workspace(&kestrel).await;
     let session = over(&kestrel, &workspace).await;
     assert!(matches!(session.exit, Some(Exit::Failed { .. })));
     let instance = session.instance.expect("an instance");
 
-    kestrel.last_active(&workspace, a_day_ago()).await;
+    a_day_passes(&kestrel);
     stays_open(&kestrel, &workspace).await;
 
     let held = kestrel.held_instances("acme").await;
@@ -313,7 +321,7 @@ async fn a_waiting_session_ends_when_its_clean_workspace_seals_idle() {
     let waiting = kestrel.answered(session.id, 1).await;
     assert_eq!(waiting.state, SessionState::Waiting);
 
-    kestrel.last_active(&workspace, a_day_ago()).await;
+    a_day_passes(&kestrel);
 
     let workspace_id = workspace.id;
     eventually("the idle sweep sealing the workspace", async || {
@@ -338,7 +346,7 @@ async fn a_waiting_session_over_unpublished_work_outlasts_the_idle_window() {
     let session = kestrel.enqueue_session(workspace.id).await;
     let waiting = kestrel.answered(session.id, 1).await;
 
-    kestrel.last_active(&workspace, a_day_ago()).await;
+    a_day_passes(&kestrel);
     stays_open(&kestrel, &workspace).await;
 
     assert_eq!(
