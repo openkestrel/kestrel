@@ -36,7 +36,7 @@ plain `cargo test`; CI uses nextest with one process per test. Heavy suites such
 `image` and `compose` stay separate (`--test docker`) and ignored for ordinary runs; CI selects
 those requiring images. Leave full workspace and ignored suites to CI.
 
-Direct `cargo test` prepares supervisor, scripted-agent and CLI executables automatically with
+Direct `cargo test` prepares supervisor, scripted-agent and Client executables automatically with
 Cargo freshness checks in the test binary's target/profile directory. No manual prebuild is needed;
 nextest processes share preparation by invocation. Within an invocation, missing or replaced
 prepared helpers fail loudly. `KESTREL_TEST_HELPERS` is for CI's prebuilt helper directory and bypasses local compilation.
