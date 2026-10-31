@@ -1,5 +1,7 @@
 use crate::support;
 
+use std::time::Duration;
+
 use serde_json::{Value, json};
 use support::fixture::Fixture;
 use support::{Kestrel, repository};
@@ -35,7 +37,7 @@ fn round_trip(answer: &Value) -> Value {
 
 #[tokio::test]
 async fn a_workspace_with_no_instance_names_its_declared_branch_without_recording_the_read() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = workspace(&kestrel).await;
     let before = kestrel
         .transcript(workspace.id)
@@ -69,10 +71,25 @@ async fn reported(
     workspace: &kestrel::domain::Workspace,
     untracked: u64,
 ) -> Value {
+    reported_after(kestrel, workspace, untracked, &Value::Null).await
+}
+
+async fn reported_after(
+    kestrel: &Kestrel,
+    workspace: &kestrel::domain::Workspace,
+    untracked: u64,
+    previous: &Value,
+) -> Value {
     answered_with(kestrel, workspace, |answer| {
         answer["state"] == "reported"
             && answer["repositories"][0]["untracked"] == untracked
             && answer["last_report"]["reported_at"] == answer["reported_at"]
+            && answer["last_report"]["repositories"] == answer["repositories"]
+            && previous["reported_at"].as_str().is_none_or(|previous| {
+                answer["reported_at"]
+                    .as_str()
+                    .is_some_and(|at| at > previous)
+            })
     })
     .await
 }
@@ -99,13 +116,14 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
         scripted_agent::{self, Script},
         supervisor,
     };
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Speaks),
     )
     .await;
     let workspace = workspace(&kestrel).await;
     let session = kestrel.post(workspace.id, "operator", "begin").await;
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     let started = kestrel.session(session.id).await;
     assert_eq!(
@@ -132,21 +150,12 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
     kestrel
         .post(workspace.id, "operator", "finish the turn")
         .await;
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 2).await;
     let closed = reported(&kestrel, &workspace, 1).await;
+    kestrel.advance(Duration::from_millis(1)).await;
     kestrel.stop_session(session.id).await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    let answer = loop {
-        let answer = reported(&kestrel, &workspace, 1).await;
-        if answer["reported_at"].as_str().unwrap() > closed["reported_at"].as_str().unwrap() {
-            break answer;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the stop never reported"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    };
+    let answer = reported_after(&kestrel, &workspace, 1, &closed).await;
     assert_eq!(
         answer["repositories"][0],
         json!({
@@ -228,20 +237,23 @@ async fn a_summary_changes_during_a_scripted_turn_and_returns_after_a_restart_be
         scripted_agent::{self, Script},
         supervisor,
     };
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
-        &scripted_agent::playing(Script::Writes),
+        &scripted_agent::playing(Script::WorksUntilCancelled),
     )
     .await;
     let workspace = workspace(&kestrel).await;
     let session = kestrel.post(workspace.id, "operator", "write a file").await;
+    kestrel.work_pass().await;
     let initial = reported(&kestrel, &workspace, 0).await;
     let started = kestrel.session(session.id).await;
     let checkout = support::environment::Environment::root_of(started.instance.as_deref().unwrap())
         .join(repository::NAME);
     std::fs::write(checkout.join(".git/index.lock"), "held by the agent").unwrap();
     assert!(initial["repositories"][0]["pushed"].is_null());
-    let changed = reported(&kestrel, &workspace, 1).await;
+    kestrel.advance(Duration::from_millis(1)).await;
+    std::fs::write(checkout.join("written.txt"), "work in progress\n").unwrap();
+    let changed = reported_after(&kestrel, &workspace, 1, &initial).await;
     assert_eq!(
         std::fs::read_to_string(checkout.join(".git/index.lock")).unwrap(),
         "held by the agent"
@@ -252,12 +264,14 @@ async fn a_summary_changes_during_a_scripted_turn_and_returns_after_a_restart_be
         kestrel.session(session.id).await.state,
         kestrel::domain::SessionState::Working
     );
+    kestrel.advance(Duration::from_millis(1)).await;
+    kestrel.interrupt(session.id, "operator").await.unwrap();
     kestrel.answered(session.id, 1).await;
-    let closed = reported(&kestrel, &workspace, 1).await;
-    assert!(closed["reported_at"].as_str().unwrap() > changed["reported_at"].as_str().unwrap());
+    let closed = reported_after(&kestrel, &workspace, 1, &changed).await;
     kestrel.stop_session(session.id).await;
+    kestrel.advance(Duration::from_millis(1)).await;
     let kestrel = kestrel.kill_and_restart().await;
-    let reconnected = reported(&kestrel, &workspace, 1).await;
+    let reconnected = reported_after(&kestrel, &workspace, 1, &closed).await;
     assert!(reconnected["reported_at"].as_str().unwrap() > closed["reported_at"].as_str().unwrap());
     kestrel.teardown().await;
 }
@@ -270,13 +284,14 @@ async fn a_supervisor_off_the_link_never_presents_its_turn_close_report_as_curre
         scripted_agent::{self, Script},
         supervisor,
     };
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Speaks),
     )
     .await;
     let workspace = workspace(&kestrel).await;
     let session = kestrel.post(workspace.id, "operator", "work").await;
+    kestrel.work_pass().await;
     let waiting = kestrel.answered(session.id, 1).await;
     reported(&kestrel, &workspace, 0).await;
     kestrel.stop_session(session.id).await;
@@ -286,7 +301,7 @@ async fn a_supervisor_off_the_link_never_presents_its_turn_close_report_as_curre
         libc::kill(process.pid(), libc::SIGKILL);
     }
     process.is_gone().await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let answer = summary(&kestrel, &workspace).await;
         if answer["state"] == "not_answering" {
@@ -299,7 +314,7 @@ async fn a_supervisor_off_the_link_never_presents_its_turn_close_report_as_curre
             tokio::time::Instant::now() < deadline,
             "still shows stale work: {answer}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     kestrel.teardown().await;
 }
@@ -309,7 +324,7 @@ async fn answered_with(
     workspace: &kestrel::domain::Workspace,
     wanted: impl Fn(&Value) -> bool,
 ) -> Value {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let answer = summary(kestrel, workspace).await;
         if wanted(&answer) {
@@ -319,7 +334,7 @@ async fn answered_with(
             tokio::time::Instant::now() < deadline,
             "never answered: {answer}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -333,7 +348,7 @@ async fn the_last_report_stays_with_its_instance_through_disconnect_restart_rele
         scripted_agent::{self, Script},
         supervisor,
     };
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Speaks),
     )
@@ -344,15 +359,18 @@ async fn the_last_report_stays_with_its_instance_through_disconnect_restart_rele
         json!({"report": "none"})
     );
     let session = kestrel.post(workspace.id, "operator", "begin").await;
+    kestrel.work_pass().await;
     let waiting = kestrel.answered(session.id, 1).await;
     let first = waiting.instance.clone().unwrap();
     std::fs::remove_dir_all(Environment::root_of(&first).join(repository::OTHER)).unwrap();
     kestrel.post(workspace.id, "operator", "again").await;
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 2).await;
     let live = answered_with(&kestrel, &workspace, |answer| {
         answer["state"] == "reported"
             && answer["repositories"][1]["git"] == "unreadable"
             && answer["last_report"]["reported_at"] == answer["reported_at"]
+            && answer["last_report"]["repositories"] == answer["repositories"]
     })
     .await;
     let mut last = json!({
@@ -406,7 +424,9 @@ async fn the_last_report_stays_with_its_instance_through_disconnect_restart_rele
     assert_eq!(released["last_report"], last);
     assert_eq!(released["earlier_reports"], json!([]));
 
+    kestrel.advance(Duration::from_millis(1)).await;
     let replacement = kestrel.post(workspace.id, "operator", "start over").await;
+    kestrel.work_pass().await;
     let replaced = answered_with(&kestrel, &workspace, |answer| {
         if answer["last_report"]["instance"] == first {
             assert_eq!(answer["last_report"], last, "{answer}");
@@ -441,13 +461,14 @@ async fn stopping_a_turn_reports_work_written_since_its_last_sampling_tick() {
         scripted_agent::{self, Script},
         supervisor,
     };
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Dawdles),
     )
     .await;
     let workspace = workspace(&kestrel).await;
     let session = kestrel.post(workspace.id, "operator", "keep working").await;
+    kestrel.work_pass().await;
     reported(&kestrel, &workspace, 0).await;
     let working = kestrel.session(session.id).await;
     let checkout =
