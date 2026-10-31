@@ -39,7 +39,7 @@ jobs:
       - name: Run the suite until the time is up
         run: |
           set -o pipefail
-          cargo nextest run --locked -p kestrel --test suite --profile stress --stress-count 200 work_summary:: 2>&1 | tee nextest.log
+          cargo nextest run --locked --workspace --profile stress --stress-duration 45m 2>&1 | tee nextest.log
 
       - name: Name the tests that failed
         if: failure()
