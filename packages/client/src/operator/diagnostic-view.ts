@@ -23,7 +23,12 @@ export type Step =
 
 export type Link =
 	| { to: "/" }
+	| { to: "/setup" }
 	| { to: "/organizations/$organization"; params: { organization: string } }
+	| {
+			to: "/organizations/$organization/settings/repositories";
+			params: { organization: string };
+	  }
 	| {
 			to: "/organizations/$organization/workspaces/$workspace";
 			params: { organization: string; workspace: string };
@@ -424,10 +429,15 @@ export function stepOf(action: Action, origin: string): Step {
 			};
 		case "connect_github":
 			return {
-				kind: "guidance",
+				kind: "link",
 				label: "Connect a repository through a GitHub App",
-				detail:
-					"A GitHub App is what lets a Session push; a public repository can be declared without one.",
+				link:
+					action.organization === null
+						? { to: "/setup" }
+						: {
+								to: "/organizations/$organization/settings/repositories",
+								params: { organization: action.organization },
+							},
 			};
 		case "continue_sign_in_relay":
 			return {

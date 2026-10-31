@@ -145,6 +145,19 @@ install completion read controls onboarding independently of current readiness; 
 setup route offers contextual repairs. Naming and continuing through saved prerequisites never set
 completion. Geist and Geist Mono are bundled once in the root stylesheet for every route.
 
+`/organizations/$organization/settings/repositories` lists and declares Projects and their GitHub
+Integrations through the shared Project declaration (`src/components/settings/project-form.tsx`),
+which setup's repository question reuses for a public repository. Review shows each address as
+`POST /operator/repository-resolutions` resolved it, the Integration it reaches GitHub as, and the
+checkout base branch apart from the branch each Workspace works on; the browser parses nothing
+itself. An unbound save claims only syntax, a connected one only the App's check. Connect GitHub
+starts the App flow with the Client's own origin as its callback base and leaves for GitHub; the
+operator returns to `/setup/github?github_app_flow=…`, which reads the flow by that reference alone,
+so a reload resumes it. It waits for the installation, pages the flow's repositories with their
+default branches, finishes with the one chosen and then declares its Project; cancelling or expiry
+offers a new flow and never claims to delete or uninstall the App. Each GitHub Integration shows its
+hook read, never as proof of reachability, and sets its URL through the shared maintenance write.
+
 `/organizations/$organization/settings/agents` lists, declares and edits Agents through the shared
 Agent declaration, which is the Agent's whole desired state: an edit sends back every default the
 Agent holds, and its name is its identity. The harness catalogue and its image availability decide

@@ -671,3 +671,23 @@ describe("evidence that is a stack", () => {
 		expect(isFramesOnly("Error: two\nlines of message\n    at src/main.js:3:1")).toBe(false);
 	});
 });
+
+describe("a step that connects GitHub", () => {
+	it("links the Organization's Repositories settings", () => {
+		expect(stepOf({ action: "connect_github", organization: "acme" }, ORIGIN)).toMatchObject({
+			kind: "link",
+			label: "Connect a repository through a GitHub App",
+			link: {
+				to: "/organizations/$organization/settings/repositories",
+				params: { organization: "acme" },
+			},
+		});
+	});
+
+	it("links setup before any Organization exists", () => {
+		expect(stepOf({ action: "connect_github", organization: null }, ORIGIN)).toMatchObject({
+			kind: "link",
+			link: { to: "/setup" },
+		});
+	});
+});

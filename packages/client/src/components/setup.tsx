@@ -3,6 +3,8 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Page, PageTitle } from "#/components/page";
 import { Diagnosis, Refusal, RetryFallback } from "#/components/refusal";
+import { ConnectGithub } from "#/components/settings/github";
+import { ProjectForm } from "#/components/settings/project-form";
 import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import {
@@ -17,6 +19,7 @@ import {
 import { Skeleton } from "#/components/ui/skeleton";
 import type { Operator, Readiness } from "#/operator/generated";
 import { operator } from "#/operator/queries";
+import { A_NEW_PROJECT } from "#/operator/repositories";
 import { installQuery, readinessQuery } from "#/operator/setup";
 import { diagnosisOf, operatorPath } from "#/operator/transport";
 
@@ -25,9 +28,13 @@ export function Setup({ organization }: { organization?: string }) {
 	const readiness = useQuery(readinessQuery(organization));
 	const queryClient = useQueryClient();
 	const [editing, setEditing] = useState(false);
+	const [chose, setChose] = useState<"repository" | "remaining">();
 	const heading = useRef<HTMLHeadingElement>(null);
 	const loaded = install.isSuccess && readiness.isSuccess;
 	const naming = readiness.data?.saved.operator === null || editing;
+	const step = naming
+		? "name"
+		: (chose ?? (readiness.data?.saved.projects.length === 0 ? "repository" : "remaining"));
 
 	useEffect(() => {
 		if (loaded && !naming) heading.current?.focus();
@@ -61,8 +68,8 @@ export function Setup({ organization }: { organization?: string }) {
 				<>
 					<PageTitle ref={heading}>{naming ? "Set up kestrel" : "Continue setup"}</PageTitle>
 					<Questionnaire
-						item={naming ? "name" : "remaining"}
-						items={[{ name: "name" }, { name: "remaining" }]}
+						item={step}
+						items={[{ name: "name" }, { name: "repository" }, { name: "remaining" }]}
 						onSubmit={(event) => event.preventDefault()}
 					>
 						<QuestionnaireProgress />
@@ -77,9 +84,41 @@ export function Setup({ organization }: { organization?: string }) {
 								saved={readiness.data.saved.operator}
 								onSaved={async () => {
 									setEditing(false);
+									setChose(undefined);
 									await refresh();
 								}}
 							/>
+						</QuestionnaireItem>
+						<QuestionnaireItem name="repository">
+							<QuestionnaireTitle>Which repository should the agent work on?</QuestionnaireTitle>
+							<QuestionnaireDescription>
+								Connect GitHub to choose one the agent can push to, or give a public repository it
+								can only read.
+							</QuestionnaireDescription>
+							{readiness.data.organization !== null && step === "repository" && (
+								<RepositoryStep
+									organization={readiness.data.organization}
+									projects={readiness.data.saved.projects}
+									refresh={refresh}
+								/>
+							)}
+							<QuestionnaireActions>
+								<Button
+									type="button"
+									variant="outline"
+									className="min-h-11 justify-self-start sm:min-h-8"
+									onClick={() => setEditing(true)}
+								>
+									Back
+								</Button>
+								<Button
+									type="button"
+									className="col-start-3 min-h-11 sm:min-h-8"
+									onClick={() => setChose("remaining")}
+								>
+									Continue
+								</Button>
+							</QuestionnaireActions>
 						</QuestionnaireItem>
 						<QuestionnaireItem name="remaining">
 							<QuestionnaireTitle>Remaining prerequisites</QuestionnaireTitle>
@@ -93,7 +132,7 @@ export function Setup({ organization }: { organization?: string }) {
 									type="button"
 									variant="outline"
 									className="min-h-11 justify-self-start sm:min-h-8"
-									onClick={() => setEditing(true)}
+									onClick={() => setChose("repository")}
 								>
 									Back
 								</Button>
@@ -208,6 +247,60 @@ function NameOperator({
 	);
 }
 
+function RepositoryStep({
+	organization,
+	projects,
+	refresh,
+}: {
+	organization: string;
+	projects: string[];
+	refresh: () => Promise<void>;
+}) {
+	const [way, setWay] = useState<"github" | "public">();
+	return (
+		<div className="grid min-w-0 gap-3 text-sm">
+			{projects.length > 0 && (
+				<p data-saved-projects>
+					Saved: the Project {projects.join(", ")}. Add another or continue.
+				</p>
+			)}
+			<fieldset className="flex flex-wrap gap-2">
+				<legend className="sr-only">How to give a repository</legend>
+				<Button
+					type="button"
+					variant={way === "github" ? "default" : "outline"}
+					aria-pressed={way === "github"}
+					onClick={() => setWay("github")}
+				>
+					Connect GitHub
+				</Button>
+				<Button
+					type="button"
+					variant={way === "public" ? "default" : "outline"}
+					aria-pressed={way === "public"}
+					onClick={() => setWay("public")}
+				>
+					Use a public repository
+				</Button>
+			</fieldset>
+			{way === "github" && <ConnectGithub organization={organization} nested />}
+			{way === "public" && (
+				<ProjectForm
+					organization={organization}
+					purpose="public_setup"
+					heading="A public repository"
+					nested
+					initial={A_NEW_PROJECT}
+					onSaved={() => {
+						setWay(undefined);
+						void refresh();
+					}}
+				/>
+			)}
+		</div>
+	);
+}
+
 function Prerequisites({
 	readiness,
 	refresh,
@@ -282,6 +375,13 @@ function OrganizationLink({ organization }: { organization: string | null }) {
 				params={{ organization }}
 			>
 				Agents
+			</Link>
+			<Link
+				className="underline"
+				to="/organizations/$organization/settings/repositories"
+				params={{ organization }}
+			>
+				Repositories
 			</Link>
 		</nav>
 	);

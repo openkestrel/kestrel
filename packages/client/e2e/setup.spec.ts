@@ -72,7 +72,7 @@ test("an empty install saves the Operator and resumes after reload", async ({
 		const identity = await (await api.get("/operator/operator")).json();
 		await page.reload();
 		await expect(page.getByRole("heading", { name: "Continue setup" })).toBeVisible();
-		await expect(page.getByText("river", { exact: true })).toBeVisible();
+		await expect(page.getByText("Which repository should the agent work on?")).toBeVisible();
 		await page.getByRole("button", { name: "Back", exact: true }).click();
 		await expect(page.getByLabel("Your name")).toHaveValue("river");
 		await expect(page.getByLabel("Your name")).toBeFocused();

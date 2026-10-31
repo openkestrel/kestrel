@@ -47,6 +47,13 @@ export function AgentsSettings({ organization }: { organization: string }) {
 				<Link className="underline" to="/organizations/$organization" params={{ organization }}>
 					Workspaces
 				</Link>
+				<Link
+					className="underline"
+					to="/organizations/$organization/settings/repositories"
+					params={{ organization }}
+				>
+					Repositories
+				</Link>
 				<Link className="underline" to="/setup" search={{ organization }}>
 					Setup and readiness
 				</Link>
