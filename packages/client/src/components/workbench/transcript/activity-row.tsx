@@ -17,7 +17,7 @@ import {
 } from "#/operator/transcript-view";
 import { diagnosisOf } from "#/operator/transport";
 import { EntryRow } from "./entry-row";
-import { type Disclosure, ToolStep } from "./step-row";
+import { type Disclosure, KindIcon, ToolStep } from "./step-row";
 
 const DELAYED_AFTER_MS = 2_000;
 
@@ -77,6 +77,9 @@ export function ActivityRow({
 	const settled = activity?.closed === true && !range.isFetching;
 	const steps = activitySteps(entries, useUnrecorded(running, entries, settled));
 	const summary = activitySummary(activity, live !== undefined);
+	const kinds = [
+		...new Set([...(activity?.tool_kinds ?? []), ...running.map((tool) => tool.tool_kind)]),
+	];
 
 	const retry = async () => {
 		const again = await range.refetch();
@@ -95,6 +98,9 @@ export function ActivityRow({
 						/>
 						{live && <Shimmer>Working</Shimmer>}
 						{live && summary.counts && <span aria-hidden>·</span>}
+						{kinds.map((kind) => (
+							<KindIcon key={kind} kind={kind} label={`${kind} tools`} />
+						))}
 						{summary.counts ? <span>{summary.counts}</span> : !live && <span>Activity</span>}
 						{summary.outcome && <span className="text-destructive">{summary.outcome}</span>}
 						{summary.duration && <span className="text-xs tabular-nums">{summary.duration}</span>}

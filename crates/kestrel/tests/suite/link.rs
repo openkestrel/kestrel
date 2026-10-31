@@ -1399,6 +1399,8 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
         .unwrap();
     let activities = page["activities"].as_array().unwrap();
     assert_eq!(activities.len(), 2);
+    assert_eq!(activities[0]["tool_kinds"], json!(["read"]));
+    assert_eq!(activities[1]["tool_kinds"], json!([]));
     assert_eq!(
         activities[0]["counts"],
         json!({"tool_calls":1,"failed_calls":1,"thoughts":1,"plans":1,"tombstones":0})
@@ -1476,6 +1478,7 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
         serde_json::Value::Null
     );
     assert_eq!(expired["activities"][0]["anomaly"], false);
+    assert_eq!(expired["activities"][0]["tool_kinds"], json!([]));
     assert_eq!(
         expired["activities"][0]["latest"]["title"],
         serde_json::Value::Null

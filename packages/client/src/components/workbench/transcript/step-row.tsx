@@ -42,19 +42,23 @@ type Recorded<Type extends Entry["type"]> = Extract<Entry, { type: Type }>;
 
 const ICON = "size-3.5 shrink-0";
 
-function KindIcon({ kind }: { kind: string }) {
-	switch (kind) {
-		case "read":
-			return <FileTextIcon aria-hidden className={ICON} />;
-		case "edit":
-			return <PencilIcon aria-hidden className={ICON} />;
-		case "search":
-			return <SearchIcon aria-hidden className={ICON} />;
-		case "execute":
-			return <SquareTerminalIcon aria-hidden className={ICON} />;
-		default:
-			return <WrenchIcon aria-hidden className={ICON} />;
-	}
+const KIND_ICONS = new Map([
+	["read", FileTextIcon],
+	["edit", PencilIcon],
+	["search", SearchIcon],
+	["execute", SquareTerminalIcon],
+]);
+
+export function KindIcon({ kind, label }: { kind: string; label?: string }) {
+	const Icon = KIND_ICONS.get(kind) ?? WrenchIcon;
+	return (
+		<Icon
+			aria-hidden={label === undefined ? true : undefined}
+			role={label === undefined ? undefined : "img"}
+			aria-label={label}
+			className={ICON}
+		/>
+	);
 }
 
 function Line({
