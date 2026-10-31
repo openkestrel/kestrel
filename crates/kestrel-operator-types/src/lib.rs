@@ -1,5 +1,5 @@
-// Allow only the lint patterns emitted by the pinned generator.
 pub mod document;
+// Allow only the lint patterns emitted by the pinned generator.
 #[allow(
     unused_variables,
     clippy::double_must_use,

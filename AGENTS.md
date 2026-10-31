@@ -45,7 +45,7 @@ other agents, so each local cargo run has a real cost.
 
 - Compiles? `cargo clippy -p <crate> --all-targets -- -D warnings`, CI's lint scoped to one
   crate; it type-checks without codegen, as `cargo check` does.
-- Changed `openapi/*.json`? Three consumers are generated from it. Regenerate the Rust types with
+- Changed `openapi/**/*.json`? Three consumers are generated from it. Regenerate the Rust types with
   `mise run generate-check`, the task CI's own step runs; it writes the files and exits 1 until
   what it wrote is committed. Lint the CLI that matches on them exhaustively with
   `cargo clippy -p kestrel-client --all-targets -- -D warnings`, and typecheck the browser Client: `cd packages/client && bun install && bun run typecheck`.
