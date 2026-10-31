@@ -103,8 +103,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel/tests/suite/model_test.rs token-budget-exempt=848
 
-/crates/kestrel/tests/suite/on_open_workspace.rs token-budget-exempt=852
-
 /crates/kestrel/tests/suite/operator.rs token-budget-exempt=778
 
 /crates/kestrel/tests/suite/operator_defaults.rs token-budget-exempt=839

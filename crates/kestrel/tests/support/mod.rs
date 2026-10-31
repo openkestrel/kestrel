@@ -11,6 +11,7 @@ pub mod built;
 pub mod client;
 pub mod compose;
 pub mod control_plane;
+pub mod correlation;
 pub mod database;
 pub mod diagnostics;
 pub mod docker;
