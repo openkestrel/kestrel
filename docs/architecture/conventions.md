@@ -107,8 +107,10 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   `component-tests/**/*.test.tsx` runs in headless Chromium in the same `bun run test`, because those
   fixtures assert roles, focus, layout and axe against real CSS. CI installs the browser before the
   Vitest step; there is no separate component-test command.
-- **Git in tests is hermetic** only if your global config is: run `cargo test` with
-  `GIT_CONFIG_GLOBAL=/dev/null` when commit signing is configured.
+- **Git fixtures isolate personal configuration.** Use `support::git::command` for Git and
+  `support::git::shell_exports` in spawned scripts: they disable global/system configuration and
+  supply fixture identities. Run tests with `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1`
+  as an additional guard for descendants.
 - **CI runs the default suite with `cargo nextest`**, one process per test. Plain `cargo test` runs
   all of `suite` in one process, so a test owns its fixture and leans on nothing another left there.
 - **CI is the merge gate** and a merge queue lands batches ([ADR-0027](../adr/0027-ci-gates-the-merge-and-a-queue-lands-the-batch.md)).

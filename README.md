@@ -25,6 +25,7 @@ Compose pulls the images main last published and opens the browser Client at <ht
 
 ## Documentation
 
+- [Contributing](CONTRIBUTING.md) — pinned tools, one passing test and focused checks.
 - [Usage guide](USAGE.md) — first session and links to manual workspaces, subscriptions, and automation.
 - [Webhook reachability](docs/webhook-reachability.md) — public-server and SSH-tunnel setup for GitHub Deliveries.
 - [Roadmap](ROADMAP.md) — current milestones and planned work.

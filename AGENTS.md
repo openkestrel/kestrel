@@ -33,6 +33,10 @@ has not caught up to. Read the map, then the page in `docs/architecture/` for wh
 
 ### Checks
 
+For a fresh checkout, helper preparation, target isolation or Git-fixture setup, read
+[CONTRIBUTING.md](CONTRIBUTING.md). Run commands through `mise exec --` unless mise is activated
+in the shell.
+
 CI is the required gate: it selects checks by changed area
 (`.github/workflows/ci.yml`); the development image's expensive self-check runs separately
 (`.github/workflows/development-image.yml`). Locally, run the **narrowest check** that answers the

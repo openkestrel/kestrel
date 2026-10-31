@@ -1,0 +1,9 @@
+{
+  "method": "Count test/tokio::test attributed function names across crates/kestrel/tests excluding support, preserving duplicate-name multiplicity",
+  "before": "c810d89e4be4a1cfd05fb2e0b62ad845c56ba357",
+  "after": "12d1e35b14b8b0d8a3a87cd45f814704d53317bb",
+  "before_count": 802,
+  "after_count": 802,
+  "removed": [],
+  "added": []
+}
