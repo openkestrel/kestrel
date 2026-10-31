@@ -505,11 +505,9 @@ test("a failed Projects read keeps what was entered and reads again; none declar
 
 test("setup takes a public repository, shows its resolved address and claims no push or checkout", async ({
 	page,
-	request,
 }) => {
 	// acme holds Projects by now, and setup asks for a repository only where none is saved.
 	await api.post("/operator/organizations", { data: { name: "beta" } });
-	await request.post("/operator/organizations", { data: { name: "beta" } });
 	await api.put("/operator/operator", { data: { name: "river" } });
 	await page.goto("/setup?organization=beta");
 	await expect(page.getByText("Which repository should the agent work on?")).toBeVisible();
