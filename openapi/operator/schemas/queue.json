@@ -1,0 +1,475 @@
+{
+  "HeldInstance": {
+    "type": "object",
+    "properties": {
+      "workspace": { "type": "string", "format": "uuid" },
+      "instance": { "type": "string" },
+      "because": { "type": "string" }
+    },
+    "required": ["workspace", "instance", "because"]
+  },
+  "Queue": {
+    "type": "object",
+    "properties": {
+      "work_role": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "The last recorded dispatch configuration, or null when none is known. This record does not establish work-role liveness.",
+        "properties": {
+          "active_work_slots": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "serialized_harnesses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "driver": {
+            "type": "string",
+            "description": "The Compute driver it provisions Instances with: the Environment work is provisioned in, read-only."
+          }
+        },
+        "required": [
+          "active_work_slots",
+          "serialized_harnesses",
+          "driver"
+        ]
+      },
+      "active_work": {
+        "$ref": "#/ActiveWork"
+      },
+      "instances": {
+        "$ref": "#/QueueInstances"
+      },
+      "queued": {
+        "type": "array",
+        "items": {
+          "$ref": "#/QueuedSession"
+        }
+      },
+      "waiting": {
+        "type": "array",
+        "items": {
+          "$ref": "#/WaitingSession"
+        }
+      },
+      "unbriefed": {
+        "type": "array",
+        "items": {
+          "$ref": "#/UnbriefedSession"
+        }
+      }
+    },
+    "required": [
+      "work_role",
+      "active_work",
+      "instances",
+      "queued",
+      "waiting",
+      "unbriefed"
+    ]
+  },
+  "ActiveWork": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "description": "The recorded Active-Work Slot limit, or null when dispatch configuration is unknown."
+      },
+      "occupied": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Every working or trailing Session on the control plane: the pool it counts against is shared by every Organization."
+      },
+      "occupants": {
+        "type": "array",
+        "items": { "$ref": "#/Occupant" },
+        "description": "This Organization's working and trailing Sessions, in the order they were enqueued."
+      },
+      "elsewhere": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Occupants of other Organizations, counted and never named."
+      }
+    },
+    "required": [
+      "limit",
+      "occupied",
+      "occupants",
+      "elsewhere"
+    ]
+  },
+  "Occupant": {
+    "type": "object",
+    "description": "A Session holding an Active-Work Slot. A trailing one answered its Turn while work its agent started still runs; it is never among the Waiting Sessions.",
+    "properties": {
+      "name": { "type": "string" },
+      "workspace": { "type": "string", "format": "uuid" },
+      "agent": { "type": "string" },
+      "phase": { "type": "string", "enum": ["working", "trailing"] },
+      "enqueued_at": { "type": "string", "format": "date-time" }
+    },
+    "required": ["name", "workspace", "agent", "phase", "enqueued_at"]
+  },
+  "QueueInstances": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": ["integer", "null"],
+        "minimum": 1,
+        "description": "The Organization's live Instance limit, or null when unbounded."
+      },
+      "count": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The Instances counted against it, idle ones retained for Unpublished Work included."
+      },
+      "counted": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "The counted Instances that can be named."
+      }
+    },
+    "required": ["limit", "count", "counted"]
+  },
+  "QueuedSession": {
+    "type": "object",
+    "properties": {
+      "position": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "description": "Global order among eligible requests for an Active-Work Slot, including queued Sessions, Held Messages and first Briefs. Retained while slots are full; null when blocked, not requesting a slot, or dispatch configuration is unknown."
+      },
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+      },
+      "workspace": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "agent": {
+        "type": "string"
+      },
+      "reasons": {
+        "type": "array",
+        "items": {
+          "$ref": "#/QueueReason"
+        },
+        "description": "Current blockers and predecessors for this request, computed by the scheduler. Other Organizations are counted without naming their Sessions."
+      },
+      "enqueued_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "position",
+      "name",
+      "workspace",
+      "agent",
+      "reasons",
+      "enqueued_at"
+    ]
+  },
+  "WaitingSession": {
+    "type": "object",
+    "description": "A Session between Turns. Held Messages request an Active-Work Slot and have a global position when eligible.",
+    "properties": {
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+      },
+      "workspace": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "agent": {
+        "type": "string"
+      },
+      "pending_since": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time",
+        "description": "When the oldest input held for its next turn arrived, or null while it is only waiting for a turn."
+      },
+      "reasons": {
+        "type": "array",
+        "items": {
+          "$ref": "#/QueueReason"
+        },
+        "description": "Current blockers and predecessors for this request, computed by the scheduler. Other Organizations are counted without naming their Sessions."
+      },
+      "enqueued_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "position": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "description": "Global order among eligible requests for an Active-Work Slot, including queued Sessions, Held Messages and first Briefs. Retained while slots are full; null when blocked, not requesting a slot, or dispatch configuration is unknown."
+      }
+    },
+    "required": [
+      "position",
+      "name",
+      "workspace",
+      "agent",
+      "pending_since",
+      "reasons",
+      "enqueued_at"
+    ]
+  },
+  "UnbriefedSession": {
+    "type": "object",
+    "description": "A Session preparing or ready for its first Turn. Provisioning is unnumbered; a written Brief competes for an Active-Work Slot once the harness is ready.",
+    "properties": {
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+      },
+      "workspace": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "agent": {
+        "type": "string"
+      },
+      "preparing": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "provisioning",
+          "cloning",
+          "starting_harness",
+          "harness_ready",
+          null
+        ],
+        "description": "The step it is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is."
+      },
+      "pending_since": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time",
+        "description": "When the oldest message held for its Brief arrived, or null while it holds none."
+      },
+      "enqueued_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "position": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "description": "Global order among eligible requests for an Active-Work Slot, including queued Sessions, Held Messages and first Briefs. Retained while slots are full; null when blocked, not requesting a slot, or dispatch configuration is unknown."
+      },
+      "reasons": {
+        "type": "array",
+        "items": {
+          "$ref": "#/QueueReason"
+        },
+        "description": "Current blockers and predecessors for this request, computed by the scheduler. Other Organizations are counted without naming their Sessions."
+      },
+      "brief_since": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time",
+        "description": "When its unstarted Brief was written, once the harness is ready, independently of later Held Messages."
+      }
+    },
+    "required": [
+      "position",
+      "name",
+      "workspace",
+      "agent",
+      "preparing",
+      "pending_since",
+      "enqueued_at",
+      "reasons",
+      "brief_since"
+    ]
+  },
+  "QueueReason": {
+    "type": "object",
+    "description": "One reason a Session has not started, for a Client to phrase.",
+    "oneOf": [
+      {
+        "$ref": "#/QueueReasonDependencies"
+      },
+      {
+        "$ref": "#/QueueReasonSubscriptionProfile"
+      },
+      {
+        "$ref": "#/QueueReasonInstanceArchiving"
+      },
+      {
+        "$ref": "#/QueueReasonLiveInstanceLimit"
+      },
+      {
+        "$ref": "#/QueueReasonActiveWorkSlots"
+      },
+      {
+        "$ref": "#/QueueReasonAhead"
+      }
+    ]
+  },
+  "InstanceRelease": {
+    "type": "object",
+    "properties": {
+      "participant": { "type": ["string", "null"], "description": "The person releasing it, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one." }
+    }
+  },
+  "ReleasedInstance": {
+    "type": "object",
+    "properties": {
+      "instance": { "type": "string" }
+    },
+    "required": ["instance"]
+  },
+  "QueueStanding": {
+    "type": "object",
+    "description": "A Workspace's Session as the queue sees it: queued with a position or reasons, waiting with reasons and held input, or unbriefed with held input.",
+    "properties": {
+      "position": { "type": ["integer", "null"], "minimum": 1, "description": "Its global place among eligible requests for an Active-Work Slot; null when blocked, not requesting a slot, or dispatch configuration is unknown." },
+      "reasons": { "type": "array", "items": { "$ref": "#/QueueReason" } },
+      "pending_since": { "type": ["string", "null"], "format": "date-time", "description": "When the oldest input held for its next turn arrived." }
+    },
+    "required": ["position", "reasons", "pending_since"]
+  },
+  "QueueReasonDependencies": {
+    "properties": {
+      "kind": {
+        "const": "dependencies"
+      },
+      "sessions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "The blocking Sessions that have not ended successfully."
+      }
+    },
+    "required": [
+      "kind",
+      "sessions"
+    ]
+  },
+  "QueueReasonSubscriptionProfile": {
+    "properties": {
+      "kind": {
+        "const": "subscription_profile"
+      },
+      "diagnostic": { "$ref": "refusals.json#/Diagnostic" },
+      "profile": {
+        "type": "string"
+      },
+      "session": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The Session holding the Profile; null when a non-Session use holds it."
+      }
+    },
+    "required": [
+      "kind",
+      "profile",
+      "session",
+      "diagnostic"
+    ]
+  },
+  "QueueReasonInstanceArchiving": {
+    "properties": {
+      "kind": {
+        "const": "instance_archiving"
+      },
+      "instance": {
+        "type": "string",
+        "description": "The idle Instance being archived, or that dispatch will archive, to make room."
+      }
+    },
+    "required": [
+      "kind",
+      "instance"
+    ]
+  },
+  "QueueReasonLiveInstanceLimit": {
+    "properties": {
+      "kind": {
+        "const": "live_instance_limit"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The Organization's live Instance limit, reached with no idle Instance known recoverable."
+      }
+    },
+    "required": [
+      "kind",
+      "limit"
+    ]
+  },
+  "QueueReasonActiveWorkSlots": {
+    "properties": {
+      "kind": {
+        "const": "active_work_slots"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The Active-Work Slot limit, every slot occupied."
+      }
+    },
+    "required": [
+      "kind",
+      "limit"
+    ]
+  },
+  "QueueReasonAhead": {
+    "properties": {
+      "kind": {
+        "const": "ahead"
+      },
+      "sessions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Earlier eligible slot requests in this Organization, in global dispatch order."
+      },
+      "elsewhere": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Earlier eligible slot requests in other Organizations, omitted when zero."
+      }
+    },
+    "required": [
+      "kind",
+      "sessions"
+    ]
+  }
+}

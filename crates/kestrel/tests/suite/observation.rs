@@ -424,11 +424,7 @@ async fn a_stopped_session_holds_no_observation() {
 
 #[test]
 fn the_published_operator_document_describes_the_observation_on_session_reads_and_state() {
-    let document: Value = serde_json::from_str(
-        &std::fs::read_to_string(support::crate_root().join("../../openapi/operator.json"))
-            .unwrap(),
-    )
-    .unwrap();
+    let document = support::published_document("operator.json");
     for schema in ["Session", "TranscriptSessionState"] {
         let schema = &document["components"]["schemas"][schema];
         assert_eq!(

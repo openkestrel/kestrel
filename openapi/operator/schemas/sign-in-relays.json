@@ -1,0 +1,301 @@
+{
+  "SignInRelayRequest": {
+    "type": "object",
+    "properties": {
+      "profile": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "SignInRelayCode": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "writeOnly": true
+      }
+    },
+    "required": [
+      "code"
+    ],
+    "additionalProperties": false
+  },
+  "RelaySavedMaterial": {
+    "type": "object",
+    "properties": {
+      "holding": {
+        "$ref": "sign-ins.json#/SignInHolding"
+      },
+      "revision": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "required": [
+      "holding",
+      "revision"
+    ],
+    "additionalProperties": false
+  },
+  "RelayStarting": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "starting"
+        ]
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "additionalProperties": false
+  },
+  "RelayAwaitingBrowser": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "awaiting_browser"
+        ]
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "code": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "state",
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "RelayAwaitingCode": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "awaiting_code"
+        ]
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      }
+    },
+    "required": [
+      "state",
+      "url"
+    ],
+    "additionalProperties": false
+  },
+  "RelaySaving": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "saving"
+        ]
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "additionalProperties": false
+  },
+  "RelayCompleted": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "completed"
+        ]
+      },
+      "sign_in": {
+        "$ref": "sign-ins.json#/SavedSignIn"
+      }
+    },
+    "required": [
+      "state",
+      "sign_in"
+    ],
+    "additionalProperties": false
+  },
+  "RelayFailed": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "failed"
+        ]
+      },
+      "diagnostic": {
+        "$ref": "refusals.json#/Diagnostic"
+      },
+      "sign_in": {
+        "$ref": "#/RelaySavedMaterial"
+      }
+    },
+    "required": [
+      "state",
+      "diagnostic"
+    ],
+    "additionalProperties": false
+  },
+  "RelayExpired": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "expired"
+        ]
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "additionalProperties": false
+  },
+  "RelayCancelled": {
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "cancelled"
+        ]
+      }
+    },
+    "required": [
+      "state"
+    ],
+    "additionalProperties": false
+  },
+  "SignInRelayProgress": {
+    "oneOf": [
+      {
+        "$ref": "#/RelayStarting"
+      },
+      {
+        "$ref": "#/RelayAwaitingBrowser"
+      },
+      {
+        "$ref": "#/RelayAwaitingCode"
+      },
+      {
+        "$ref": "#/RelaySaving"
+      },
+      {
+        "$ref": "#/RelayCompleted"
+      },
+      {
+        "$ref": "#/RelayFailed"
+      },
+      {
+        "$ref": "#/RelayExpired"
+      },
+      {
+        "$ref": "#/RelayCancelled"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "state"
+    }
+  },
+  "SignInRelay": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "organization": {
+        "type": "string"
+      },
+      "harness": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "destination": {
+        "$ref": "sign-ins.json#/SignInHolding"
+      },
+      "version": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "deadline": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "finished_at": {
+        "type": "string",
+        "format": "date-time",
+        "nullable": true
+      },
+      "progress": {
+        "$ref": "#/SignInRelayProgress"
+      }
+    },
+    "required": [
+      "id",
+      "organization",
+      "harness",
+      "method",
+      "destination",
+      "version",
+      "created_at",
+      "deadline",
+      "finished_at",
+      "progress"
+    ],
+    "additionalProperties": false
+  },
+  "RelayEnd": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "required": [
+      "id",
+      "version"
+    ],
+    "additionalProperties": false
+  },
+  "RelayEvent": {
+    "oneOf": [
+      {
+        "$ref": "#/SignInRelay",
+        "x-sse-event": "relay"
+      },
+      {
+        "$ref": "#/RelayEnd",
+        "x-sse-event": "end"
+      }
+    ]
+  }
+}

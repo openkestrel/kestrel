@@ -1,0 +1,146 @@
+{
+  "workspaces-workspace-sessions": {
+    "get": {
+      "operationId": "listSessions",
+      "summary": "List a Workspace's Sessions.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "Every Session, ordered by when it was enqueued.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "../schemas/sessions.json#/Session" } } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    },
+    "post": {
+      "operationId": "enqueueSession",
+      "summary": "Enqueue a Session in a Workspace.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/SessionDeclaration" } } } },
+      "responses": {
+        "201": { "description": "The queued Session.", "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "sessions-session": {
+    "get": {
+      "operationId": "showSession",
+      "summary": "Show a Session.",
+      "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The Session.", "headers": { "ETag": { "description": "A strong validator over the body exactly as served. A read that changes nothing answers the same tag.", "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "304": { "description": "The Session has not changed since the tag the request carried in `If-None-Match`.", "headers": { "ETag": { "description": "The tag the read would have served.", "schema": { "type": "string" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "sessions-session-stop": {
+    "post": {
+      "operationId": "stopSession",
+      "summary": "End a Session.",
+      "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The ended Session: succeeded between turns, failed mid-turn or before it started.", "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "sessions-session-interrupt": {
+    "post": {
+      "operationId": "interruptSession",
+      "summary": "Interrupt a Session's working Turn.",
+      "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase; a trailing one has already answered its Turn, and is ended by stopping the Session. A second interrupt while one is pending answers 202 and sends nothing more.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/SessionInterrupt" } } } },
+      "responses": {
+        "202": { "description": "The Session, with the pending interrupt on it while the request is in flight.", "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "sessions-session-options": {
+    "post": {
+      "operationId": "setSessionOption",
+      "summary": "Change one of a Session's options between Turns.",
+      "description": "A queued Session's declared model, mode or thought level is set at once and checked when the Session is set up (200). A live Session's change is durable and answered by the harness (202), and the Session carries `changing_options` until it settles. A change during a working Turn, on an ended or unreachable Session, or on an unbriefed Session with no options yet is refused, naming the phase.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/session-options.json#/OptionChange" } } } },
+      "responses": {
+        "200": { "description": "The Session whose declared value changed.", "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "202": { "description": "The change waits on the harness, and the Session's `changing_options` carries it.", "content": { "application/json": { "schema": { "$ref": "../schemas/sessions.json#/Session" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "instances": {
+    "get": {
+      "operationId": "listHeldInstances",
+      "summary": "List the Instances held for work that exists nowhere else.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "Every held Instance, and why it is held.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "../schemas/queue.json#/HeldInstance" } } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "queue": {
+    "get": {
+      "operationId": "showQueue",
+      "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, the Waiting Sessions and the unbriefed ones.",
+      "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. A queued Session whose Workspace has no Brief waits only on its Instance. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Unbriefed Sessions follow those, beside them: they hold their Instances and no Active-Work Slot, are never numbered, and carry the step they are preparing on and any message held for their Brief. Nothing is estimated. The Active-Work Slot limit and the Compute driver are the ones the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": {
+          "description": "One snapshot.",
+          "content": { "application/json": { "schema": { "$ref": "../schemas/queue.json#/Queue" } } }
+        },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "fixture", "version": "0" },
+  "paths": {
+    "/things/{thing}": {
+      "get": {
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Thing" } } } },
+          "404": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/inline": {
+      "get": {
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Part" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Refused": {
+        "description": "Refused.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Refusal" } } }
+      }
+    },
+    "schemas": {
+      "Inline": { "type": "array", "items": { "$ref": "#/components/schemas/Thing" } },
+      "Thing": {
+        "type": "object",
+        "properties": {
+          "part": { "$ref": "#/components/schemas/Part" },
+          "refusal": { "$ref": "#/components/schemas/Refusal", "description": "Why it was refused." }
+        }
+      },
+      "Part": { "type": "string" },
+      "Unreferenced": { "type": "integer" },
+      "Refusal": {
+        "type": "object",
+        "properties": { "part": { "$ref": "#/components/schemas/Part" }, "inline": { "$ref": "#/components/schemas/Inline" } }
+      }
+    }
+  }
+}

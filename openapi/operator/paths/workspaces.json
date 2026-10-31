@@ -1,0 +1,156 @@
+{
+  "workspaces": {
+    "get": {
+      "operationId": "listWorkspaces",
+      "summary": "List every Workspace in an Organization.",
+      "parameters": [{
+        "name": "organization",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }],
+      "responses": {
+        "200": { "description": "Every Workspace, ordered by when it opened, with its latest Session and its place in the queue.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "../schemas/workspaces.json#/WorkspaceListed" } } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    },
+    "post": {
+      "operationId": "openWorkspace",
+      "summary": "Open a Workspace.",
+      "parameters": [{
+        "name": "organization",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/WorkspaceDeclaration" } } } },
+      "responses": {
+        "201": { "description": "The opened Workspace and its first Session.", "content": { "application/json": { "schema": { "$ref": "../schemas/organizations.json#/Opened" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace": {
+    "get": {
+      "operationId": "showWorkspace",
+      "summary": "Show a Workspace.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The Workspace.", "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/Workspace" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace-messages": {
+    "post": {
+      "operationId": "postToWorkspace",
+      "summary": "Post to a Workspace.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/WorkspaceMessage" } } } },
+      "responses": {
+        "200": { "description": "The Session the message reached: the one it started, woke, or wrote the first Brief for, and the Held Message it left, if it was held rather than recorded at once.", "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/Posted" } } } },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace-messages-id": {
+    "put": {
+      "operationId": "editWorkspaceMessage",
+      "summary": "Edit a Held Message.",
+      "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one its author withdrew is refused 409.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/WorkspaceMessage" } } } },
+      "responses": {
+        "200": { "description": "The edited Held Message.", "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/HeldMessage" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    },
+    "delete": {
+      "operationId": "withdrawWorkspaceMessage",
+      "summary": "Withdraw a Held Message.",
+      "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one already withdrawn is refused 409.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/WorkspaceMessageWithdrawal" } } } },
+      "responses": {
+        "204": { "description": "The message is withdrawn, and no Turn will see it." },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace-seal": {
+    "post": {
+      "operationId": "sealWorkspace",
+      "summary": "Seal a Workspace.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The sealed Workspace.", "content": { "application/json": { "schema": { "$ref": "../schemas/workspaces.json#/Workspace" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "workspaces-workspace-instance-release": {
+    "post": {
+      "operationId": "releaseInstance",
+      "summary": "Destroy a Workspace's Instance.",
+      "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization. Whatever the Instance holds that was never pushed is discarded.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/queue.json#/InstanceRelease" } } } },
+      "responses": {
+        "200": { "description": "The Instance released, and recorded as released in the Transcript.", "content": { "application/json": { "schema": { "$ref": "../schemas/queue.json#/ReleasedInstance" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

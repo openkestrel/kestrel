@@ -43,6 +43,12 @@ pub fn crate_root() -> std::path::PathBuf {
     )
 }
 
+/// One of the published OpenAPI documents under `openapi/`, assembled from the files it refers to.
+pub fn published_document(name: &str) -> serde_json::Value {
+    kestrel_operator_types::document::bundle(&crate_root().join("../../openapi").join(name))
+        .unwrap_or_else(|error| panic!("a readable {name}: {error}"))
+}
+
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;

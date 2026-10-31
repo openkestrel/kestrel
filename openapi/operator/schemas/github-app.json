@@ -1,0 +1,222 @@
+{
+  "GithubAppStart": {
+    "type": "object",
+    "required": [
+      "name",
+      "callback_base"
+    ],
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "callback_base": {
+        "type": "string"
+      },
+      "webhook_base": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "api": {
+        "type": "string",
+        "enum": ["https://api.github.com"],
+        "description": "Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused"
+      },
+      "app_organization": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppStarted": {
+    "type": "object",
+    "required": [
+      "url",
+      "flow"
+    ],
+    "properties": {
+      "url": {
+        "type": "string"
+      },
+      "flow": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppFlow": {
+    "type": "object",
+    "required": [
+      "flow",
+      "phase",
+      "organization",
+      "name",
+      "expires_at",
+      "installation_id",
+      "integration",
+      "repository",
+      "guidance"
+    ],
+    "properties": {
+      "flow": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "exchanging",
+          "converted",
+          "select_repository",
+          "completed",
+          "cancelled",
+          "expired",
+          "conversion_failed"
+        ]
+      },
+      "organization": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "expires_at": {
+        "type": "string"
+      },
+      "installation_id": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "integration": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "repository": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "guidance": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppFinish": {
+    "type": "object",
+    "required": [
+      "repository"
+    ],
+    "properties": {
+      "repository": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppInstallation": {
+    "type": "object",
+    "required": [
+      "id",
+      "account"
+    ],
+    "properties": {
+      "id": {
+        "type": "integer"
+      },
+      "account": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppInstallations": {
+    "type": "object",
+    "required": [
+      "installations",
+      "page",
+      "next_page"
+    ],
+    "properties": {
+      "installations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/GithubAppInstallation"
+        }
+      },
+      "page": {
+        "type": "integer"
+      },
+      "next_page": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppRepository": {
+    "type": "object",
+    "required": [
+      "id",
+      "repository",
+      "default_branch",
+      "private"
+    ],
+    "properties": {
+      "id": {
+        "type": "integer"
+      },
+      "repository": {
+        "type": "string"
+      },
+      "default_branch": {
+        "type": "string"
+      },
+      "private": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false
+  },
+  "GithubAppRepositories": {
+    "type": "object",
+    "required": [
+      "repositories",
+      "page",
+      "total",
+      "next_page"
+    ],
+    "properties": {
+      "repositories": {
+        "type": "array",
+        "items": {
+          "$ref": "#/GithubAppRepository"
+        }
+      },
+      "page": {
+        "type": "integer"
+      },
+      "total": {
+        "type": "integer"
+      },
+      "next_page": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false
+  }
+}

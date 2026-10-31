@@ -1,0 +1,486 @@
+{
+  "Direction": {
+    "enum": [
+      "inbound",
+      "outbound"
+    ]
+  },
+  "IntegrationRegistration": {
+    "description": "A registration, by the kind of external system it connects to.",
+    "oneOf": [
+      {
+        "$ref": "#/GithubRegistration"
+      },
+      {
+        "$ref": "#/WebhookRegistration"
+      }
+    ],
+    "discriminator": {
+      "propertyName": "kind",
+      "mapping": {
+        "github": "#/components/schemas/GithubRegistration",
+        "webhook": "#/components/schemas/WebhookRegistration"
+      }
+    }
+  },
+  "GithubRegistration": {
+    "description": "A connection to GitHub, watching one repository.",
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "github"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "repository": {
+        "type": "string",
+        "description": "The repository it watches, as owner/name."
+      },
+      "app_id": {
+        "type": "integer",
+        "description": "The GitHub App's ID."
+      },
+      "installation": {
+        "type": "integer",
+        "description": "The ID of the installation the App was installed as."
+      },
+      "private_key": {
+        "type": "string",
+        "writeOnly": true,
+        "description": "The App's private key, PEM-encoded."
+      },
+      "carries": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/Direction"
+        },
+        "description": "The directions it carries. Absent means both."
+      },
+      "interval": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": "1m",
+        "description": "How often the poll reads the App's Delivery log, as a duration such as `1m` or `PT30S`."
+      },
+      "webhook_secret": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "writeOnly": true,
+        "description": "The App's webhook secret. Given one, a Delivery that reaches kestrel's webhook is recorded on arrival; the repository is polled either way."
+      },
+      "api": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": "https://api.github.com",
+        "description": "The GitHub API it reaches."
+      }
+    },
+    "required": [
+      "kind",
+      "name",
+      "repository",
+      "app_id",
+      "installation",
+      "private_key"
+    ]
+  },
+  "WebhookRegistration": {
+    "description": "A generic endpoint any producer can POST CloudEvents to. It carries inbound only.",
+    "type": "object",
+    "properties": {
+      "kind": {
+        "const": "webhook"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "secret": {
+        "type": "string",
+        "minLength": 1,
+        "writeOnly": true,
+        "description": "The secret a sender presents as `Authorization: Bearer <secret>`."
+      },
+      "carries": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/Direction"
+        },
+        "description": "The directions it carries. Absent means inbound."
+      }
+    },
+    "required": [
+      "kind",
+      "name",
+      "secret"
+    ]
+  },
+  "IntegrationState": {
+    "description": "Disabled pauses every use of an Integration and keeps everything it resumes with. Retired ends every use for good and keeps only what its history refers to.",
+    "enum": [
+      "enabled",
+      "disabled",
+      "retired"
+    ]
+  },
+  "IntegrationRetirement": {
+    "description": "The explicit choice to retire an Integration.",
+    "type": "object",
+    "properties": {
+      "revision": {
+        "type": "integer",
+        "description": "The revision the retirement was decided against."
+      }
+    }
+  },
+  "CanceledPost": {
+    "description": "Something a Session said that will not be posted where its work came from.",
+    "type": "object",
+    "properties": {
+      "session": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "turn": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "description": "The Turn whose response it was; null for the Session's own Outcome."
+      },
+      "canceled_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "attempted_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time",
+        "description": "When a request for it had already gone out; the comment may be there all the same."
+      }
+    },
+    "required": [
+      "session",
+      "turn",
+      "canceled_at",
+      "reason",
+      "attempted_at"
+    ]
+  },
+  "IntegrationChange": {
+    "description": "What maintenance may change; an omitted field keeps its value.",
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "carries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/Direction"
+        },
+        "description": "Every direction it carries afterwards; a generic webhook carries inbound only."
+      },
+      "interval": {
+        "type": "string",
+        "description": "How often a GitHub Integration's poll reads its App's Delivery log, as a positive duration."
+      },
+      "revision": {
+        "type": "integer",
+        "description": "The revision this change was decided against."
+      }
+    }
+  },
+  "IntegrationWebhookUrl": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "base": {
+        "type": "string",
+        "description": "Public HTTPS origin; omitted to use the deployment setting."
+      },
+      "revision": {
+        "type": "integer",
+        "format": "int64"
+      }
+    }
+  },
+  "IntegrationWebhook": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "url",
+      "deliveries",
+      "pending_url"
+    ],
+    "properties": {
+      "pending_url": {
+        "type": ["string", "null"],
+        "description": "An unfinished URL update; retry set-url with the same base to finish it, including after restart."
+      },
+      "url": {
+        "type": "string"
+      },
+      "deliveries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/WebhookDelivery"
+        }
+      }
+    }
+  },
+  "WebhookDelivery": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "guid",
+      "delivered_at",
+      "status_code"
+    ],
+    "properties": {
+      "guid": {
+        "type": "string"
+      },
+      "delivered_at": {
+        "type": "string"
+      },
+      "status_code": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "int64",
+        "description": "HTTP result recorded by GitHub; null when unavailable."
+      }
+    }
+  },
+  "IntegrationWebhookSecretRotation": {
+    "description": "The choice to rotate a GitHub Integration's webhook secret. kestrel makes the replacement; it is never named here.",
+    "type": "object",
+    "properties": {
+      "revision": {
+        "type": "integer",
+        "description": "The revision this rotation was decided against."
+      }
+    }
+  },
+  "IntegrationPrivateKeyReplacement": {
+    "description": "A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.",
+    "type": "object",
+    "properties": {
+      "private_key": {
+        "type": "string",
+        "description": "The App's RSA private key, in PEM."
+      },
+      "revision": {
+        "type": "integer",
+        "description": "The revision this replacement was decided against."
+      }
+    },
+    "required": ["private_key"]
+  },
+  "Integration": {
+    "description": "A registered Integration. What it presents to the external system is never part of it.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "name": {
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "github",
+          "webhook"
+        ]
+      },
+      "repository": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The repository a GitHub Integration watches."
+      },
+      "bot_login": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered."
+      },
+      "carries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/Direction"
+        }
+      },
+      "state": {
+        "$ref": "#/IntegrationState"
+      },
+      "revision": {
+        "type": "integer",
+        "description": "Bumped by every change, so a Client can say which one it decided against."
+      },
+      "disabled_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time"
+      },
+      "retired_at": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "format": "date-time"
+      },
+      "canceled_posts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/CanceledPost"
+        },
+        "description": "What retiring it left unsaid, each with why."
+      },
+      "polled_every": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "How often it is polled, when it is."
+      },
+      "webhook_path": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled."
+      },
+      "last_event_refusal": {
+        "oneOf": [
+          {
+            "$ref": "#/EventRefusal"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "diagnostic": {
+        "description": "Why it is out of use now, with the steps that resume it when any do; null while it is in use.",
+        "oneOf": [
+          {
+            "$ref": "refusals.json#/Diagnostic"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "webhook_secret_rotation": {
+        "description": "Its unfinished webhook-secret rotation; null when none is under way.",
+        "oneOf": [
+          {
+            "$ref": "#/WebhookSecretRotation"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "kind",
+      "repository",
+      "bot_login",
+      "carries",
+      "state",
+      "revision",
+      "disabled_at",
+      "retired_at",
+      "canceled_posts",
+      "polled_every",
+      "webhook_path",
+      "last_event_refusal",
+      "diagnostic",
+      "webhook_secret_rotation"
+    ]
+  },
+  "WebhookSecretRotation": {
+    "description": "An unfinished webhook-secret rotation. Until it finishes, a delivery signed with either the previous or the replacement secret is accepted.",
+    "type": "object",
+    "properties": {
+      "started_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When the replacement was saved."
+      },
+      "attempted_at": {
+        "type": ["string", "null"],
+        "format": "date-time",
+        "description": "When GitHub was last asked to set it; null before it is asked."
+      },
+      "diagnostic": {
+        "$ref": "refusals.json#/Diagnostic",
+        "description": "Where it stands and how to finish it: how the last attempt failed, or that nothing said how it ended."
+      }
+    },
+    "required": ["started_at", "attempted_at", "diagnostic"]
+  },
+  "EventRefusal": {
+    "description": "The latest Event an Integration refused rather than stored, or the Deliveries it lost to GitHub's retention, visible until acknowledged.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string"
+      },
+      "id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The refused Event's id; null when Deliveries were lost rather than one refused."
+      },
+      "bytes": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 0
+      },
+      "reason": {
+        "type": "string"
+      },
+      "observed_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "source",
+      "id",
+      "bytes",
+      "reason",
+      "observed_at"
+    ]
+  }
+}

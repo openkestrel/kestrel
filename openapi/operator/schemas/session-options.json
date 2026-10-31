@@ -1,0 +1,133 @@
+{
+  "OptionChange": {
+    "description": "One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.",
+    "type": "object",
+    "properties": {
+      "participant": { "type": ["string", "null"], "minLength": 1, "description": "The person making the change, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one." },
+      "option": { "type": ["string", "null"], "description": "The harness option's id. Exactly one of option or category." },
+      "category": { "type": ["string", "null"], "description": "One of model, mode or thought_level. Exactly one of option or category." },
+      "value": { "type": "string", "minLength": 1 }
+    },
+    "required": ["value"]
+  },
+  "ChangingOption": {
+    "description": "An option change a person asked for while a Session is live, held until the harness answers it (ADR-0041).",
+    "type": "object",
+    "properties": {
+      "option": { "type": "string" },
+      "category": { "type": "string" },
+      "value": { "type": "string" },
+      "participant": { "type": "string" }
+    },
+    "required": ["option", "category", "value", "participant"]
+  },
+  "SessionOption": {
+    "type": "object",
+    "description": "A harness config option, whole: what it is, what it may be and what it is now.",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "description": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "category": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`."
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "select",
+          "boolean"
+        ]
+      },
+      "current": {
+        "$ref": "#/SessionOptionCurrent"
+      },
+      "values": {
+        "type": "array",
+        "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.",
+        "items": {
+          "$ref": "#/SessionOptionValue"
+        }
+      },
+      "groups": {
+        "type": "array",
+        "description": "The offered values of a grouped select; empty for an ungrouped one.",
+        "items": {
+          "$ref": "#/SessionOptionGroup"
+        }
+      },
+      "warns_cache": {
+        "type": "boolean",
+        "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)."
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "description",
+      "category",
+      "kind",
+      "current",
+      "values",
+      "groups",
+      "warns_cache"
+    ]
+  },
+  "SessionOptionCurrent": {
+    "anyOf": [
+      {
+        "$ref": "#/SelectedOptionValue"
+      },
+      {
+        "$ref": "#/ToggleOptionValue"
+      }
+    ],
+    "description": "The current value: a value id for a select, a boolean for a toggle."
+  },
+  "SessionOptionValue": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" },
+      "name": { "type": "string" },
+      "description": { "type": ["string", "null"] }
+    },
+    "required": ["value", "name", "description"]
+  },
+  "SessionOptionGroup": {
+    "type": "object",
+    "properties": {
+      "group": { "type": "string" },
+      "name": { "type": "string" },
+      "values": { "type": "array", "items": { "$ref": "#/SessionOptionValue" } }
+    },
+    "required": ["group", "name", "values"]
+  },
+  "SessionCommand": {
+    "type": "object",
+    "description": "A command the harness offers for the Session, as a composer lists it.",
+    "properties": {
+      "name": { "type": "string" },
+      "description": { "type": "string" },
+      "input_hint": { "type": ["string", "null"] }
+    },
+    "required": ["name", "description", "input_hint"]
+  },
+  "SelectedOptionValue": {
+    "type": "string"
+  },
+  "ToggleOptionValue": {
+    "type": "boolean"
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "ChangesEvent": {
+    "description": "SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.",
+    "anyOf": [
+      {
+        "$ref": "#/Change",
+        "x-sse-event": "change"
+      },
+      {
+        "$ref": "#/ChangesOpen",
+        "x-sse-event": "open"
+      },
+      {
+        "$ref": "#/ChangesResync",
+        "x-sse-event": "resync"
+      }
+    ]
+  },
+  "Change": {
+    "description": "One resource that changed: a Workspace or Session by id, with the name of the Workspace it belongs to, or the Organization's queue, which carries neither. Never a copy of its state.",
+    "oneOf": [
+      {
+        "$ref": "#/ChangeWorkspace"
+      },
+      {
+        "$ref": "#/ChangeSession"
+      },
+      {
+        "$ref": "#/ChangeQueue"
+      }
+    ]
+  },
+  "Refetch": {
+    "description": "The event that means refetch every view the Client subscribes to. It carries no fields.",
+    "type": "object"
+  },
+  "ChangeWorkspace": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "const": "workspace"
+      },
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "The name of the Workspace."
+      }
+    },
+    "required": [
+      "resource",
+      "id",
+      "workspace"
+    ]
+  },
+  "ChangeSession": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "const": "session"
+      },
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "The name of the Workspace that holds the Session."
+      }
+    },
+    "required": [
+      "resource",
+      "id",
+      "workspace"
+    ]
+  },
+  "ChangeQueue": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "const": "queue"
+      }
+    },
+    "required": [
+      "resource"
+    ]
+  },
+  "ChangesOpen": {
+    "allOf": [
+      {
+        "$ref": "#/Refetch"
+      }
+    ]
+  },
+  "ChangesResync": {
+    "allOf": [
+      {
+        "$ref": "#/Refetch"
+      }
+    ]
+  },
+  "StreamReservation": {
+    "type": "object",
+    "properties": {
+      "token": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "token"
+    ]
+  },
+  "StreamSubscription": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "notices",
+          "transcript"
+        ]
+      },
+      "organization": {
+        "type": "string"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "The Workspace whose Transcript a `transcript` subscription follows, addressed as the Transcript read addresses it. Required for `transcript`."
+      },
+      "after": {
+        "type": "string",
+        "description": "The last Transcript cursor the tab saw. Absent means from the beginning."
+      },
+      "kinds": {
+        "type": "string",
+        "description": "Comma-separated Transcript kinds, as the Transcript read takes them.",
+        "default": "shared_state"
+      },
+      "participant": {
+        "type": "string",
+        "description": "The name a `transcript` subscription's follower joins presence under, refused as the Transcript read's `as` is. Absent means anonymous."
+      }
+    },
+    "required": [
+      "kind",
+      "organization"
+    ]
+  },
+  "StreamEvent": {
+    "description": "The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.",
+    "type": "object",
+    "properties": {
+      "subscription": {
+        "type": "string"
+      },
+      "cursor": {
+        "type": "string",
+        "description": "The subscription's Transcript cursor after this event, on entry, Activity and cursor events only. It resumes the subscription as `after`."
+      },
+      "data": {
+        "description": "The per-resource stream's payload for this event name."
+      }
+    },
+    "required": [
+      "subscription",
+      "data"
+    ]
+  }
+}

@@ -1,0 +1,377 @@
+{
+  "sign-ins-harness-method-relay": {
+    "post": {
+      "operationId": "start_sign_in_relay",
+      "summary": "start sign in relay",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "202": {
+          "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/sign-in-relays.json#/SignInRelay"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "410": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      },
+      "requestBody": {
+        "required": false,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/sign-in-relays.json#/SignInRelayRequest"
+            }
+          }
+        }
+      }
+    }
+  },
+  "sign-ins-harness-method-relay-relay": {
+    "get": {
+      "operationId": "read_sign_in_relay",
+      "summary": "read sign in relay",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "relay",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/sign-in-relays.json#/SignInRelay"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "410": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    },
+    "delete": {
+      "operationId": "cancel_sign_in_relay",
+      "summary": "cancel sign in relay",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "relay",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/sign-in-relays.json#/SignInRelay"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "410": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "sign-ins-harness-method-relay-relay-code": {
+    "post": {
+      "operationId": "submit_sign_in_relay_code",
+      "summary": "submit sign in relay code",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "relay",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/sign-in-relays.json#/SignInRelay"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "410": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      },
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/sign-in-relays.json#/SignInRelayCode"
+            }
+          }
+        }
+      }
+    }
+  },
+  "sign-ins-harness-method-relay-relay-events": {
+    "get": {
+      "operationId": "follow_sign_in_relay",
+      "summary": "follow sign in relay",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "method",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "relay",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+          "content": {
+            "text/event-stream": {
+              "schema": {
+                "$ref": "../schemas/sign-in-relays.json#/RelayEvent"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "410": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  }
+}

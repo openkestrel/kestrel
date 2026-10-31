@@ -1,0 +1,11 @@
+{
+  "Thing": {
+    "type": "object",
+    "properties": {
+      "part": { "$ref": "#/Part" },
+      "refusal": { "$ref": "refusals.json#/Refusal", "description": "Why it was refused." }
+    }
+  },
+  "Part": { "type": "string" },
+  "Unreferenced": { "type": "integer" }
+}

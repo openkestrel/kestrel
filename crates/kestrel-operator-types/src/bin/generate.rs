@@ -21,9 +21,8 @@ fn main() -> Result<()> {
         _ => return Err(anyhow!("usage: generate [--check]")),
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document: Value = serde_json::from_str(&fs::read_to_string(
-        root.join("../../openapi/operator.json"),
-    )?)?;
+    let document =
+        kestrel_operator_types::document::bundle(&root.join("../../openapi/operator.json"))?;
     let types = TypeMappingConfig {
         date_time: DateStrategy::String,
         uuid: UuidStrategy::Uuid,

@@ -1,0 +1,54 @@
+{
+  "DeclarationDocument": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "project": { "$ref": "organizations.json#/ProjectDeclaration" },
+      "agent": { "$ref": "organizations.json#/AgentDeclaration" },
+      "trigger": {
+        "allOf": [
+          { "$ref": "triggers.json#/TriggerDeclaration" },
+          { "not": { "anyOf": [{ "required": ["every"] }, { "required": ["cron"] }, { "required": ["zone"] }] } }
+        ]
+      }
+    },
+    "required": ["project", "agent", "trigger"]
+  },
+  "AppliedDeclaration": {
+    "type": "object",
+    "properties": {
+      "declarations": {
+        "type": "array",
+        "items": { "$ref": "#/DeclarationChange" }
+      },
+      "admitting_outsiders": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["declarations", "admitting_outsiders"]
+  },
+  "DeclarationChange": {
+    "type": "object",
+    "description": "What applying a Declaration does to one record. Whether a route lists a record it leaves unchanged is that route's choice.",
+    "properties": {
+      "kind": { "type": "string", "enum": ["project", "agent", "trigger"] },
+      "name": { "type": "string" },
+      "action": { "type": "string", "enum": ["add", "change", "unchanged", "remove"] },
+      "differences": {
+        "type": "array",
+        "items": { "$ref": "#/DeclarationDifference" }
+      }
+    },
+    "required": ["kind", "name", "action", "differences"]
+  },
+  "DeclarationDifference": {
+    "type": "object",
+    "properties": {
+      "field": { "type": "string" },
+      "was": { "type": ["string", "null"] },
+      "becomes": { "type": ["string", "null"] }
+    },
+    "required": ["field", "was", "becomes"]
+  }
+}

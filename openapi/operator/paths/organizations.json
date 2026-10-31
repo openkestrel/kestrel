@@ -1,0 +1,458 @@
+{
+  "organizations": {
+    "get": {
+      "operationId": "listOrganizations",
+      "summary": "List every Organization.",
+      "responses": {
+        "200": {
+          "description": "Every record, ordered by name.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "../schemas/organizations.json#/Organization"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    },
+    "post": {
+      "operationId": "declareOrganization",
+      "summary": "Declare an Organization.",
+      "description": "Declaring an Organization that already exists changes nothing and answers the one that exists.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/organizations.json#/OrganizationDeclaration"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "A record by this name already existed, and is now what the declaration describes.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Organization"
+              }
+            }
+          }
+        },
+        "201": {
+          "description": "No record by this name existed, and one was made.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Organization"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "starts": {
+    "post": {
+      "operationId": "start",
+      "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
+      "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. A Project it declares with selected Integrations passes the same App check as declaring one, before anything is written, and needs its Organization to exist already. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "../schemas/organizations.json#/StartPlan" }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "description": "What the plan settled on, and the Workspace and Session it reached.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "../schemas/organizations.json#/Started" }
+            }
+          }
+        },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "repository-resolutions": {
+    "post": {
+      "operationId": "resolveRepositories",
+      "summary": "Resolve repositories the way a declaration would, saving nothing.",
+      "description": "Checks each repository's syntax, expands `owner/repo` and `github.com/owner/repo` to their HTTPS `.git` address, and finds the directory each is checked out into, refusing a list two of which would share one. A repository given an Integration must be the one that Integration watches, and resolves to its HTTPS address whatever transport it was given by, since an App lends no SSH authority; the Integration must be an enabled GitHub one that carries outbound. An SSH address given no Integration is kept as it is, and nothing provisions it a credential. It contacts no source: a resolved repository is not one the Instance can reach or check out, and a local path names the Instance's filesystem.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/organizations.json#/RepositoryResolutionRequest"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Each repository as a declaration would hold it, in order.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/RepositoryResolution"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "projects": {
+    "get": {
+      "operationId": "listProjects",
+      "summary": "List every Project in an Organization.",
+      "description": "Given a repository, only the Projects whose first repository it names, whatever transport or spelling either address is given in.",
+      "responses": {
+        "200": {
+          "description": "Every record, ordered by name.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "../schemas/organizations.json#/Project"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      },
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "description": "The name of the Organization the records belong to.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "repository",
+          "in": "query",
+          "required": false,
+          "description": "An address of the repository the listed Projects begin with, such as a clone's origin.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "post": {
+      "operationId": "declareProject",
+      "summary": "Declare a Project.",
+      "description": "Desired state: a Project by this name that already exists keeps its identity and takes on the repositories, selected Integrations and branch declared. Selecting an Integration for a repository, or changing that repository or the branch under a selection, first asks the selected App for the repository and the branch: an App GitHub does not accept, a repository it does not reach, a rate limit or an outage saves nothing and leaves the previous declaration, and a repository the App cannot read is never reported as one that does not exist. The Integration is read again in the saving transaction, so maintenance that landed meanwhile refuses with 409. A check that passed says the App reached the repository and branch then, never that an Instance will check them out. A Workspace already open keeps the Integrations it opened with.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "description": "The name of the Organization the records belong to.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/organizations.json#/ProjectDeclaration"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "A record by this name already existed, and is now what the declaration describes.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Project"
+              }
+            }
+          }
+        },
+        "201": {
+          "description": "No record by this name existed, and one was made.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Project"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "403": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "agents": {
+    "get": {
+      "operationId": "listAgents",
+      "summary": "List every Agent in an Organization.",
+      "responses": {
+        "200": {
+          "description": "Every record, ordered by name.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "../schemas/organizations.json#/Agent"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      },
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "description": "The name of the Organization the records belong to.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "post": {
+      "operationId": "declareAgent",
+      "summary": "Declare an Agent.",
+      "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Session, and a Subscription Profile added since can widen it. A Session already in flight keeps the model it was dispatched with. A harness the configured image does not declare is a `setup_gap` (409) naming the image, and an image that could not be inspected is `unavailable` (503); either way nothing is declared.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "description": "The name of the Organization the records belong to.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/organizations.json#/AgentDeclaration"
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "A record by this name already existed, and is now what the declaration describes.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Agent"
+              }
+            }
+          }
+        },
+        "201": {
+          "description": "No record by this name existed, and one was made.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/organizations.json#/Agent"
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "409": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "422": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "agents-agent-model": {
+    "put": {
+      "operationId": "setAgentModel",
+      "summary": "Change the model an Agent works with.",
+      "description": "Every Session already in flight keeps the model it was dispatched with.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "agent", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/organizations.json#/AgentModel" } } } },
+      "responses": {
+        "200": { "description": "The Agent, working with the model it names from its next Session on.", "content": { "application/json": { "schema": { "$ref": "../schemas/organizations.json#/Agent" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "declaration": {
+    "post": {
+      "operationId": "applyDeclaration",
+      "summary": "Apply a Project, Agent and Trigger declaration together.",
+      "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained. A Project selecting Integrations passes the same App check as declaring one, before anything is written: a preview asks too, and an apply never relies on what a preview found. The Agent's harness passes the same image capability check as declaring an Agent and a preview, before anything is written.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "../schemas/declarations.json#/DeclarationDocument" }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "The declaration's diff from the previous state.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "../schemas/declarations.json#/AppliedDeclaration" }
+            }
+          }
+        },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "declaration-preview": {
+    "post": {
+      "operationId": "previewDeclaration",
+      "summary": "Preview a declaration without changing control-plane state.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "../schemas/declarations.json#/DeclarationDocument" }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "The declaration's diff from the current state.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "../schemas/declarations.json#/AppliedDeclaration" }
+            }
+          }
+        },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

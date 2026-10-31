@@ -1,3 +1,4 @@
+pub mod document;
 // Allow only the lint patterns emitted by the pinned generator.
 #[allow(
     unused_variables,

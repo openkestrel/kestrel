@@ -1,0 +1,7 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "fixture", "version": "0" },
+  "paths": {
+    "/a": { "get": { "responses": { "200": { "content": { "application/json": { "schema": { "$ref": "operator/schemas/reached.json#/Thing" } } } } } } }
+  }
+}

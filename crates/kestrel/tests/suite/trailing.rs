@@ -883,14 +883,7 @@ async fn cap_reclamation_never_archives_a_trailing_sessions_instance() {
 
 #[test]
 fn the_published_documents_describe_trailing() {
-    let document = |name: &str| -> serde_json::Value {
-        serde_json::from_str(
-            &std::fs::read_to_string(support::crate_root().join("../../openapi").join(name))
-                .expect("a readable openapi document"),
-        )
-        .expect("valid json")
-    };
-    let operator = document("operator.json");
+    let operator = support::published_document("operator.json");
     let session = &operator["components"]["schemas"]["Session"];
     assert!(
         session["properties"]["state"]["enum"]
@@ -899,7 +892,7 @@ fn the_published_documents_describe_trailing() {
             .contains(&serde_json::json!("trailing"))
     );
 
-    let link = document("link.json");
+    let link = support::published_document("link.json");
     let schemas = &link["components"]["schemas"];
     assert_eq!(
         schemas["Report"]["discriminator"]["mapping"]["settled"],

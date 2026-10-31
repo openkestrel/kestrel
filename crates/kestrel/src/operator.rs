@@ -6288,9 +6288,11 @@ mod tests {
 
     #[test]
     fn every_route_is_diagnosed_under_the_operation_it_is_documented_as() {
-        let document: serde_json::Value =
-            serde_json::from_str(include_str!("../../../openapi/operator.json"))
-                .expect("a valid operator document");
+        let document = kestrel_operator_types::document::bundle(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../openapi/operator.json"
+        )))
+        .expect("a valid operator document");
         let paths = document["paths"].as_object().expect("paths");
 
         for (path, operations) in paths {

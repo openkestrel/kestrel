@@ -1,0 +1,211 @@
+{
+  "Install": {
+    "type": "object",
+    "properties": {
+      "initial_setup_complete": {
+        "type": "boolean",
+        "description": "Whether the first confirmed start has committed its Workspace and Session. Durable, and independent of current readiness, of the Operator's name and of what remains to declare: naming the Operator, saving a sign-in, opening a Workspace or enqueueing a Session never sets it, and no later failure clears it."
+      }
+    },
+    "required": [
+      "initial_setup_complete"
+    ]
+  },
+  "Readiness": {
+    "type": "object",
+    "description": "Whether work can start in an Organization, read at this request. Ready means a usable path exists, not that every saved sign-in works.",
+    "properties": {
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "blocked",
+          "unavailable"
+        ],
+        "description": "`blocked` when `gaps` holds a prerequisite known to be missing. `unavailable` when none is known missing but an inspection in `unavailable` failed, so readiness could not be established. `ready` otherwise."
+      },
+      "organization": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The Organization read: the one named, or the only one. Null when none exists."
+      },
+      "client_url": {
+        "type": "string",
+        "description": "The browser Client's configured URL, never one derived from this API's port."
+      },
+      "initial_setup_complete": {
+        "type": "boolean",
+        "description": "As `Install` reads it: durable, and independent of `outcome`."
+      },
+      "selected": {
+        "$ref": "#/ReadinessSelection"
+      },
+      "sign_in": {
+        "description": "The saved sign-in the selected path would use, when exactly one is established. Never its material.",
+        "anyOf": [
+          {
+            "$ref": "sign-ins.json#/SavedSignIn"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "saved": {
+        "$ref": "#/ReadinessSaved"
+      },
+      "gaps": {
+        "type": "array",
+        "description": "Every blocking prerequisite that could be established, in the order to repair them: the Operator, a usable sign-in on a harness the image carries, a selected sign-in needing attention, a repository, a Project. Each names its scope in `context` and its repair in `next_steps`.",
+        "items": {
+          "$ref": "refusals.json#/Diagnostic"
+        }
+      },
+      "warnings": {
+        "type": "array",
+        "description": "What does not block the path: selected material nothing has checked, and broken material the path does not use.",
+        "items": {
+          "$ref": "refusals.json#/Diagnostic"
+        }
+      },
+      "unavailable": {
+        "type": "array",
+        "description": "Inspections that failed. Nothing is claimed about what one would have established: a harness is never absent, nor present, because its image could not be inspected.",
+        "items": {
+          "$ref": "refusals.json#/Diagnostic"
+        }
+      }
+    },
+    "required": [
+      "outcome",
+      "organization",
+      "client_url",
+      "initial_setup_complete",
+      "selected",
+      "sign_in",
+      "saved",
+      "gaps",
+      "warnings",
+      "unavailable"
+    ],
+    "additionalProperties": false
+  },
+  "ReadinessSelection": {
+    "type": "object",
+    "description": "The path read: each value as it was named, or as it resolved when exactly one choice exists. Null where nothing was named and several remain, because none is chosen for the reader.",
+    "properties": {
+      "harness": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "profile": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "sign_in_method": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "project": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "harness",
+      "model",
+      "profile",
+      "sign_in_method",
+      "project"
+    ],
+    "additionalProperties": false
+  },
+  "ReadinessSaved": {
+    "type": "object",
+    "description": "The prerequisites already saved, whether or not the selected path uses them.",
+    "properties": {
+      "operator": {
+        "anyOf": [
+          {
+            "$ref": "#/Operator"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sign_ins": {
+        "type": "array",
+        "description": "Every catalogued sign-in saved where this path would look, as the sign-ins read lists them.",
+        "items": {
+          "$ref": "sign-ins.json#/SavedSignIn"
+        }
+      },
+      "github_integrations": {
+        "type": "array",
+        "description": "The names of the GitHub Integrations that lend a repository authority now: enabled, and carrying outbound.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "projects": {
+        "type": "array",
+        "description": "The names of the Projects declared.",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "operator",
+      "sign_ins",
+      "github_integrations",
+      "projects"
+    ],
+    "additionalProperties": false
+  },
+  "Operator": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name"
+    ]
+  },
+  "OperatorDeclaration": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "name"
+    ]
+  }
+}

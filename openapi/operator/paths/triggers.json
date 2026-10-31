@@ -1,0 +1,234 @@
+{
+  "events": {
+    "get": {
+      "operationId": "listEvents",
+      "summary": "List the Events recorded for an Organization.",
+      "parameters": [
+        {
+          "name": "organization",
+          "in": "path",
+          "required": true,
+          "description": "The name of the Organization the records belong to.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "description": "How many to list at most.",
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 50
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The most recently recorded first.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "../schemas/events.json#/EventRecord"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "events-record": {
+    "get": {
+      "operationId": "showEvent",
+      "summary": "Show one Event's whole envelope and payload.",
+      "parameters": [
+        {
+          "name": "record",
+          "in": "path",
+          "required": true,
+          "description": "The Event's record identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "description": "The Event.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/events.json#/EventRecord"
+              }
+            }
+          }
+        },
+        "404": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        },
+        "503": {
+          "$ref": "../../operator.json#/components/responses/Refused"
+        }
+      }
+    }
+  },
+  "triggers": {
+    "get": {
+      "operationId": "listTriggers",
+      "summary": "List every Trigger in an Organization.",
+      "parameters": [{ "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "responses": {
+        "200": { "description": "Every Trigger, ordered by name.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "../schemas/triggers.json#/Trigger" } } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    },
+    "post": {
+      "operationId": "declareTrigger",
+      "summary": "Declare a Trigger.",
+      "description": "Desired state: a Trigger by this name keeps its identity and takes on this declaration. Events recorded before a changed declaration never fire it.",
+      "parameters": [{ "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerDeclaration" } } } },
+      "responses": {
+        "200": { "description": "The existing Trigger, converged on this declaration.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Trigger" } } } },
+        "201": { "description": "The newly declared Trigger.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Trigger" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "triggers-trigger": {
+    "get": {
+      "operationId": "showTrigger",
+      "summary": "Show a Trigger.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "trigger", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The named Trigger.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Trigger" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "triggers-trigger-test": {
+    "post": {
+      "operationId": "testTrigger",
+      "summary": "Test a Trigger without starting work.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "trigger", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerTest" } } } },
+      "responses": {
+        "200": { "description": "Whether it matches and what a firing would render.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerTestResult" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "triggers-trigger-disable": {
+    "post": {
+      "operationId": "disableTrigger",
+      "summary": "Disable a Trigger.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "trigger", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The disabled Trigger.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Trigger" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "triggers-trigger-enable": {
+    "post": {
+      "operationId": "enableTrigger",
+      "summary": "Enable a Trigger.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "trigger", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "responses": {
+        "200": { "description": "The enabled Trigger.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Trigger" } } } },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "triggers-trigger-dispatch": {
+    "post": {
+      "operationId": "dispatchTrigger",
+      "summary": "Start a Trigger's work on an issue now.",
+      "description": "The issue is read through the named GitHub Integration and recorded as a dev.kestrel.dispatched Event, which fires the Trigger whether or not its filter matches.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "trigger", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerDispatch" } } } },
+      "responses": {
+        "200": { "description": "What the firing did: opened a Workspace, fed an open one, or found none to feed.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/Fired" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "applied-triggers": {
+    "post": {
+      "operationId": "applyTriggers",
+      "summary": "Make an Organization's applied Triggers what a file declares.",
+      "description": "Triggers the file does not name are removed if a file applied them, and left alone if flags declared them. One transaction: a file that cannot be applied whole changes nothing.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerFile" } } } },
+      "responses": {
+        "200": { "description": "The diff applied.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/AppliedTriggers" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "applied-triggers-preview": {
+    "post": {
+      "operationId": "previewAppliedTriggers",
+      "summary": "Preview a trigger file without changing control-plane state.",
+      "parameters": [
+        { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/TriggerFile" } } } },
+      "responses": {
+        "200": { "description": "The diff applying it would make.", "content": { "application/json": { "schema": { "$ref": "../schemas/triggers.json#/AppliedTriggers" } } } },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

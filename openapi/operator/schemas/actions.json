@@ -1,0 +1,416 @@
+{
+  "NameOperatorAction": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "const": "name_operator"
+      },
+      "name": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "missing": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "action",
+      "name",
+      "missing"
+    ]
+  },
+  "Action": {
+    "type": "object",
+    "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
+    "oneOf": [
+      { "$ref": "#/NameOperatorAction" },
+      { "$ref": "#/DeclareOrganizationAction" },
+      { "$ref": "#/DeclareProjectAction" },
+      { "$ref": "#/DeclareAgentAction" },
+      { "$ref": "#/DeclareSubscriptionProfileAction" },
+      { "$ref": "#/SetProviderCredentialAction" },
+      { "$ref": "#/InspectResourceAction" },
+      { "$ref": "#/ListResourcesAction" },
+      { "$ref": "#/StopSessionAction" },
+      { "$ref": "#/EnqueueSessionAction" },
+      { "$ref": "#/EnableIntegrationAction" },
+      { "$ref": "#/ConnectGithubAction" },
+      { "$ref": "#/ReplaceIntegrationPrivateKeyAction" },
+      { "$ref": "#/ResumeIntegrationWebhookSecretRotationAction" },
+      { "$ref": "#/ReleaseInstanceAction" },
+      { "$ref": "#/CorrectFieldAction" },
+      { "$ref": "#/SignInAction" },
+      { "$ref": "#/InspectHarnessImageAction" },
+      { "$ref": "#/CheckConnectionAction" },
+      { "$ref": "#/RetryReadAction" },
+      { "$ref": "#/RetryRequestAction" },
+      { "$ref": "#/InspectOperationAction" },
+      { "$ref": "#/ContinueSignInRelayAction" },
+      { "$ref": "#/CancelSignInRelayAction" }
+    ]
+  },
+  "DeclareOrganizationAction": {
+    "properties": {
+      "action": { "const": "declare_organization" },
+      "name": { "type": ["string", "null"] },
+      "missing": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Which of this action's fixed inputs are not yet known, from `name`."
+      }
+    },
+    "required": ["action", "name", "missing"]
+  },
+  "DeclareProjectAction": {
+    "properties": {
+      "action": { "const": "declare_project" },
+      "organization": { "type": "string" },
+      "name": { "type": ["string", "null"] },
+      "repositories": {
+        "type": ["array", "null"],
+        "items": { "type": "string" }
+      },
+      "branch": { "type": ["string", "null"] },
+      "missing": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Which of this action's fixed inputs are not yet known, from `name`, `repositories`, `branch`."
+      }
+    },
+    "required": ["action", "organization", "name", "repositories", "branch", "missing"]
+  },
+  "DeclareAgentAction": {
+    "properties": {
+      "action": { "const": "declare_agent" },
+      "organization": { "type": "string" },
+      "name": { "type": ["string", "null"] },
+      "harness": { "type": ["string", "null"] },
+      "missing": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Which of this action's fixed inputs are not yet known, from `name`, `harness`."
+      }
+    },
+    "required": ["action", "organization", "name", "harness", "missing"]
+  },
+  "DeclareSubscriptionProfileAction": {
+    "properties": {
+      "action": { "const": "declare_subscription_profile" },
+      "organization": { "type": "string" },
+      "name": { "type": ["string", "null"] },
+      "owner": { "type": ["string", "null"] },
+      "missing": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Which of this action's fixed inputs are not yet known, from `name`, `owner`."
+      }
+    },
+    "required": ["action", "organization", "name", "owner", "missing"]
+  },
+  "SetProviderCredentialAction": {
+    "properties": {
+      "action": { "const": "set_provider_credential" },
+      "organization": { "type": "string" },
+      "name": {
+        "type": "string",
+        "description": "The credential's variable. Its value is always collected privately and never serialized here."
+      }
+    },
+    "required": ["action", "organization", "name"]
+  },
+  "InspectResourceAction": {
+    "properties": {
+      "action": { "const": "inspect_resource" },
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "reference": { "type": ["string", "null"] },
+      "organization": { "type": ["string", "null"] }
+    },
+    "required": ["action", "resource", "reference", "organization"]
+  },
+  "ListResourcesAction": {
+    "properties": {
+      "action": { "const": "list_resources" },
+      "resource": { "$ref": "refusals.json#/Resource" },
+      "organization": { "type": ["string", "null"] }
+    },
+    "required": ["action", "resource", "organization"]
+  },
+  "StopSessionAction": {
+    "properties": {
+      "action": { "const": "stop_session" },
+      "organization": { "type": "string" },
+      "session": { "type": "string" },
+      "consequence": {
+        "type": "string",
+        "description": "Display-only explanation of the destructive effect; wording never decides whether confirmation is required."
+      },
+      "effect": { "$ref": "refusals.json#/Consequence" },
+      "requires_choice": { "$ref": "refusals.json#/ExplicitChoice" }
+    },
+    "required": ["action", "organization", "session", "consequence", "effect", "requires_choice"]
+  },
+  "EnqueueSessionAction": {
+    "properties": {
+      "action": { "const": "enqueue_session" },
+      "organization": { "type": "string" },
+      "workspace": { "type": "string" },
+      "missing": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["action", "organization", "workspace", "missing"]
+  },
+  "EnableIntegrationAction": {
+    "properties": {
+      "action": {
+        "const": "enable_integration"
+      },
+      "organization": {
+        "type": "string"
+      },
+      "integration": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action",
+      "organization",
+      "integration"
+    ]
+  },
+  "ConnectGithubAction": {
+    "description": "Connect a repository through a GitHub App, which is what lends a Session the authority to push.",
+    "properties": {
+      "action": {
+        "const": "connect_github"
+      },
+      "organization": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Null when no Organization exists yet."
+      }
+    },
+    "required": [
+      "action",
+      "organization"
+    ]
+  },
+  "ReplaceIntegrationPrivateKeyAction": {
+    "description": "Never carries the key: a Client reads it from a file or standard input when the step is taken.",
+    "properties": {
+      "action": {
+        "const": "replace_integration_private_key"
+      },
+      "organization": {
+        "type": "string"
+      },
+      "integration": {
+        "type": "string"
+      },
+      "retry_after_seconds": {
+        "type": ["integer", "null"]
+      }
+    },
+    "required": [
+      "action",
+      "organization",
+      "integration",
+      "retry_after_seconds"
+    ]
+  },
+  "ResumeIntegrationWebhookSecretRotationAction": {
+    "description": "Sets the saved replacement as the App's webhook secret again.",
+    "properties": {
+      "action": {
+        "const": "resume_integration_webhook_secret_rotation"
+      },
+      "organization": {
+        "type": "string"
+      },
+      "integration": {
+        "type": "string"
+      },
+      "retry_after_seconds": {
+        "type": ["integer", "null"]
+      }
+    },
+    "required": [
+      "action",
+      "organization",
+      "integration",
+      "retry_after_seconds"
+    ]
+  },
+  "ReleaseInstanceAction": {
+    "properties": {
+      "action": { "const": "release_instance" },
+      "organization": { "type": "string" },
+      "workspace": { "type": "string" },
+      "instance": { "type": ["string", "null"] },
+      "consequence": {
+        "type": "string",
+        "description": "Display-only explanation of the destructive effect; wording never decides whether confirmation is required."
+      },
+      "effect": { "$ref": "refusals.json#/Consequence" },
+      "requires_choice": { "$ref": "refusals.json#/ExplicitChoice" }
+    },
+    "required": [
+      "action",
+      "organization",
+      "workspace",
+      "instance",
+      "consequence",
+      "effect",
+      "requires_choice"
+    ]
+  },
+  "CorrectFieldAction": {
+    "properties": {
+      "action": { "const": "correct_field" },
+      "operation": { "type": "string" },
+      "resource": {
+        "anyOf": [{ "$ref": "refusals.json#/Resource" }, { "type": "null" }]
+      },
+      "field": { "type": "string" },
+      "constraint": { "type": "string" },
+      "allowed_values": {
+        "type": ["array", "null"],
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["action", "operation", "resource", "field", "constraint", "allowed_values"]
+  },
+  "SignInAction": {
+    "properties": {
+      "action": { "const": "sign_in" },
+      "harness": { "type": ["string", "null"] },
+      "method": { "type": ["string", "null"] },
+      "sign_in": {
+        "type": ["string", "null"],
+        "description": "A safe locator for which sign-in to use, never held material."
+      }
+    },
+    "required": ["action", "harness", "method", "sign_in"]
+  },
+  "InspectHarnessImageAction": {
+    "properties": {
+      "action": { "const": "inspect_harness_image" },
+      "harness": { "type": ["string", "null"] },
+      "image": { "type": ["string", "null"] },
+      "command": { "type": ["string", "null"] }
+    },
+    "required": ["action", "harness", "image", "command"]
+  },
+  "CheckConnectionAction": {
+    "properties": {
+      "action": { "const": "check_connection" },
+      "service": { "type": "string" },
+      "compose": {
+        "type": "boolean",
+        "description": "Whether Compose-specific checks apply, known only from the selected deployment's own evidence."
+      }
+    },
+    "required": ["action", "service", "compose"]
+  },
+  "RetryReadAction": {
+    "properties": {
+      "action": { "const": "retry_read" },
+      "operation": { "type": "string" },
+      "resource": { "type": ["string", "null"] },
+      "retry_after_seconds": { "type": ["integer", "null"] }
+    },
+    "required": ["action", "operation", "resource", "retry_after_seconds"]
+  },
+  "RetryRequestAction": {
+    "description": "The write was refused before anything was saved, so sending the same request again is safe.",
+    "properties": {
+      "action": { "const": "retry_request" },
+      "operation": { "type": "string" },
+      "resource": { "type": ["string", "null"] },
+      "retry_after_seconds": { "type": ["integer", "null"] }
+    },
+    "required": ["action", "operation", "resource", "retry_after_seconds"]
+  },
+  "InspectOperationAction": {
+    "properties": {
+      "action": { "const": "inspect_operation" },
+      "operation": { "type": "string" },
+      "resource": { "type": ["string", "null"] },
+      "uncertain": {
+        "type": "boolean",
+        "description": "Whether the operation's result is unknown, used after a lost write response. Never a signal to replay the write."
+      }
+    },
+    "required": ["action", "operation", "resource", "uncertain"]
+  },
+  "ContinueSignInRelayAction": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "continue_sign_in_relay"
+        ]
+      },
+      "organization": {
+        "type": "string"
+      },
+      "harness": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "relay": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action",
+      "organization",
+      "harness",
+      "method",
+      "relay"
+    ],
+    "additionalProperties": false
+  },
+  "CancelSignInRelayAction": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "cancel_sign_in_relay"
+        ]
+      },
+      "organization": {
+        "type": "string"
+      },
+      "harness": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "relay": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action",
+      "organization",
+      "harness",
+      "method",
+      "relay"
+    ],
+    "additionalProperties": false
+  }
+}

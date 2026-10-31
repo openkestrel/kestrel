@@ -1,0 +1,89 @@
+{
+  "Refusal": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "field": {
+        "type": "string",
+        "description": "The request field the message concerns, when the refusal is about one."
+      }
+    },
+    "required": [
+      "message"
+    ]
+  },
+  "DiagnosedRefusal": {
+    "description": "A typed Diagnostic, or the plain Refusal a refusal falls back to until its producer is typed. Only `kind` tells them apart.",
+    "anyOf": [
+      {
+        "$ref": "#/Diagnostic"
+      },
+      {
+        "$ref": "#/Refusal"
+      }
+    ]
+  },
+  "Resource": {
+    "description": "A kind of record a reference, a declaration or an action names (ADR-0052).",
+    "type": "string",
+    "enum": [
+      "organization",
+      "project",
+      "agent",
+      "subscription_profile",
+      "provider_credential",
+      "integration",
+      "trigger",
+      "event",
+      "workspace",
+      "session",
+      "instance",
+      "held_message",
+      "transcript_payload",
+      "sign_in_test",
+      "sign_in_relay"
+    ]
+  },
+  "Candidate": {
+    "description": "One record an ambiguous reference could have meant.",
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" }
+    },
+    "required": ["id", "name"]
+  },
+  "Consequence": {
+    "description": "What a destructive step does to work, typed so a Client never reads it from the consequence sentence.",
+    "type": "string",
+    "enum": ["fails_session", "ends_session", "discards_unpublished_work"]
+  },
+  "ExplicitChoice": {
+    "description": "A destructive step is taken only by an explicit choice, whatever its consequence says; a Client never runs it as a default or automatic repair.",
+    "const": true
+  },
+  "Diagnostic": {
+    "type": "object",
+    "description": "Why kestrel would not do what it was asked, and the ordered, typed next steps that repair, inspect or retry it (ADR-0052). `message` is display only; a Client never classifies it.",
+    "oneOf": [
+      { "$ref": "request-diagnostics.json#/MissingReferenceDiagnostic" },
+      { "$ref": "request-diagnostics.json#/AmbiguousReferenceDiagnostic" },
+      { "$ref": "request-diagnostics.json#/MalformedRequestDiagnostic" },
+      { "$ref": "request-diagnostics.json#/ForbiddenActionDiagnostic" },
+      { "$ref": "request-diagnostics.json#/StateConflictDiagnostic" },
+      { "$ref": "request-diagnostics.json#/ExpiredResourceDiagnostic" },
+      { "$ref": "request-diagnostics.json#/InvalidFieldDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/SetupGapDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/UnavailableDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/InstanceTimeoutDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/CredentialRejectedDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/AuthenticationFailedDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/ExecutableMissingDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/UnknownFailureDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/ConnectionFailedDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/ClientFailureDiagnostic" },
+      { "$ref": "failure-diagnostics.json#/UnknownResponseDiagnostic" }
+    ]
+  }
+}
