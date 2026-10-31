@@ -96,6 +96,16 @@ impl<'a> Database<'a> {
         cleaned
     }
 
+    pub async fn relays(&self) -> Vec<String> {
+        let pool = self.pool().await;
+        let ids = sqlx::query_scalar("SELECT id FROM sign_in_relay")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        ids
+    }
+
     pub async fn relay_metadata(&self, id: &str) -> String {
         let pool = self.pool().await;
         let snapshot = sqlx::query_scalar("SELECT snapshot FROM sign_in_relay WHERE id = ?")

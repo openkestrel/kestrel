@@ -13,7 +13,7 @@ use crate::diagnostic::answer::{bounded, inspect_operation, unknown_response};
 use crate::exit::{Exit, Failed};
 
 pub use crate::diagnostic::answer::{Request, refusal, unreachable, unreadable};
-pub use crate::diagnostic::kind::{after_save, message};
+pub use crate::diagnostic::kind::{after_save, carried, message};
 
 static WROTE: AtomicBool = AtomicBool::new(false);
 

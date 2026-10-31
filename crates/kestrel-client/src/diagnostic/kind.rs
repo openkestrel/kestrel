@@ -46,6 +46,14 @@ pub fn after_save(error: anyhow::Error, saved: &str) -> anyhow::Error {
     anyhow::anyhow!(Failed::diagnosed(Exit::of(&error), diagnostic))
 }
 
+/// A Diagnostic a successful answer carried, failing the invocation as its kind says.
+pub fn carried(diagnostic: wire::Diagnostic) -> Failed {
+    Failed::diagnosed(
+        exit_for(&diagnostic, StatusCode::UNPROCESSABLE_ENTITY),
+        diagnostic,
+    )
+}
+
 pub(super) fn next_steps(diagnostic: &wire::Diagnostic) -> &[wire::Action] {
     each_kind!(diagnostic, d => &d.next_steps)
 }

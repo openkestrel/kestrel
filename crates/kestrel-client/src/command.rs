@@ -5,11 +5,14 @@ pub(crate) mod event;
 mod input;
 pub(crate) mod instance;
 pub(crate) mod integration;
+pub(crate) mod login;
 pub(crate) mod operator;
 pub(crate) mod organization;
 pub(crate) mod profile;
 pub(crate) mod project;
+mod relay;
 pub(crate) mod session;
+pub(crate) mod sign_in;
 pub(crate) mod start;
 pub(crate) mod status;
 pub(crate) mod trigger;
@@ -30,11 +33,13 @@ use self::declaration::Apply;
 use self::event::EventCommand;
 use self::instance::InstanceCommand;
 use self::integration::IntegrationCommand;
+use self::login::Login;
 use self::operator::OperatorCommand;
 use self::organization::OrganizationCommand;
 use self::profile::ProfileCommand;
 use self::project::ProjectCommand;
 use self::session::SessionCommand;
+use self::sign_in::SignInCommand;
 use self::start::Start;
 use self::trigger::TriggerCommand;
 use self::workspace::WorkspaceCommand;
@@ -62,6 +67,12 @@ pub(crate) enum Command {
     /// Hold, list and forget the Provider Credentials an Organization's Sessions reach a model with
     #[command(subcommand)]
     Credential(CredentialCommand),
+    /// Sign in to a harness, or import a token, key or login file, and save it where its Sign-in
+    /// Method says: a subscription in your own Profile, a key with the Organization
+    Login(Login),
+    /// Test saved sign-ins
+    #[command(subcommand)]
+    SignIn(SignInCommand),
     /// Declare Subscription Profiles, and hold, list and forget the logins in them
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -100,6 +111,8 @@ impl Command {
             | Command::Project(_)
             | Command::Agent(_)
             | Command::Credential(_)
+            | Command::Login(_)
+            | Command::SignIn(_)
             | Command::Profile(_)
             | Command::Integration(_)
             | Command::Trigger(_)
