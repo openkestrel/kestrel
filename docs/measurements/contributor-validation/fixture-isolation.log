@@ -294,4 +294,3 @@ test work::a_session_that_ended_is_never_claimed_again ... ok
 test work::a_session_that_reaches_an_instance_starts_and_ends_in_the_transcript ... ok
 
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1043 filtered out; finished in 51.87s
-

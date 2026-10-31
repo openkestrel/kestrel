@@ -17,7 +17,7 @@ absolute `/private/tmp/kestrel-595-target`; trials run sequentially and remove o
 target. No full local workspace suite runs. Measurements exclude installation and download time.
 
 [measure.py](measure.py) records exact commands, timestamps, exit codes and wall seconds in
-[local.json](local.json), with per-command logs beside it. Run from the trusted current checkout:
+[local.json](local.json), with per-command logs beside it (trailing blank lines removed for Git whitespace checks). Run from the trusted current checkout:
 
 ```sh
 git clone --no-hardlinks --no-checkout . /private/tmp/kestrel-595-before
