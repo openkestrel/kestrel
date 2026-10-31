@@ -273,9 +273,6 @@ jobs:
       - name: Test
         run: bun run test
 
-      - name: Stress the repositories and setup suites (temporary, #864)
-        run: bun run build && bunx playwright test e2e/repositories.spec.ts e2e/setup.spec.ts --repeat-each 25 --workers=1
-
       - name: Test the built Client against a control plane
         run: bun run e2e
 
