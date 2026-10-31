@@ -9,8 +9,6 @@ docs/measurements/** linguist-generated=true
 # Over the token budget from before it existed; each value is the issue that splits the file.
 # Blank lines keep parallel PRs that delete neighbouring entries from conflicting.
 
-/.github/workflows/ci.yml token-budget-exempt=855
-
 /GLOSSARY.md token-budget-exempt=816
 
 /ROADMAP.md token-budget-exempt=796
