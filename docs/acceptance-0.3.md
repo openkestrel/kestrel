@@ -67,7 +67,7 @@ summary). The host and control-plane clocks agreed to within 0.2 s.
 | A long tool call while running | A 90-step `for … sleep 1` loop stayed in the live line as `in_progress` for its whole run; Codex's `gh pr checks --watch` showed as running for 283 s and as a background-task unit. |
 | Completed, failed and unresolved status | Activities carried completed and failed counts (`12 tools, 3 failed`) and the interrupted Turn's status. |
 | Detail and a large payload on demand | Expanding an Activity fetched only that range (`first_seq=16&last_seq=20`). "Load 91 KiB payload" fetched all 92,884 bytes. |
-| An expired payload | **Not exercised.** Tombstones need 30-day-old entries; only the scripted e2e (`activities.spec.ts`) covers it. |
+| An expired payload | **Not exercised.** Tombstones need 30-day-old entries; only the scripted e2e (`transcript.spec.ts`) covers it. |
 
 ### Late join and reconnect — passes
 
