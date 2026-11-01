@@ -8,13 +8,12 @@ use kestrel::instance::{Git, Observed};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::Kestrel;
-use support::client;
 use support::fixture::Fixture;
 use support::operator_queue::{
     a_queued_workspace_in, a_waiting_session, jacks_workspace, numbered, occupants, profile_reason,
     queue_of, queue_read, sharing_a_serialized_profile, waiting_row,
 };
-use support::operator_requests::{client, got};
+use support::operator_requests::got;
 
 fn clean_checkout() -> Vec<Observed> {
     vec![Observed {
@@ -262,56 +261,6 @@ async fn a_trailing_session_holds_its_slot_until_it_settles_into_waiting() {
     let queue = queue_read(&kestrel).await;
     assert_eq!(occupants(&queue), [(json!(working.name), json!("working"))]);
     waiting_row(&queue, &trailing.name);
-
-    kestrel.teardown().await;
-}
-
-#[tokio::test]
-async fn kestrel_queue_says_each_occupants_phase_on_its_row() {
-    let kestrel = Kestrel::boot().await;
-    sharing_a_serialized_profile(&kestrel, None, 2).await;
-    let trailing = kestrel
-        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
-        .await;
-    kestrel.on_the_link(&trailing).await;
-    kestrel.start_on_the_link(&trailing).await;
-    kestrel.report_answered(&trailing, 1).await;
-    let working = kestrel
-        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
-        .await;
-
-    let operator = kestrel.operator();
-    let shown = tokio::task::spawn_blocking(move || {
-        client::ran_on_a_terminal(&operator, &["queue", "--organization", "acme"], 240, "")
-    })
-    .await
-    .expect("the client should run");
-    assert!(shown.status.success(), "{}", shown.said);
-    for (session, phase) in [(&trailing, "trailing"), (&working, "working")] {
-        let row = shown
-            .said
-            .lines()
-            .find(|line| line.contains(&session.name) && line.contains(phase))
-            .unwrap_or_else(|| panic!("no row says {} is {phase}: {}", session.name, shown.said));
-        assert!(!row.contains("waiting"), "{row}");
-    }
-
-    let queue = client(&kestrel, &["queue", "--organization", "acme", "--json"])
-        .await
-        .json();
-    let occupants: Vec<Value> = queue["active_work"]["occupants"]
-        .as_array()
-        .expect("the occupants")
-        .iter()
-        .map(|occupant| json!({ "name": occupant["name"], "phase": occupant["phase"] }))
-        .collect();
-    assert_eq!(
-        occupants,
-        [
-            json!({ "name": trailing.name, "phase": "trailing" }),
-            json!({ "name": working.name, "phase": "working" }),
-        ]
-    );
 
     kestrel.teardown().await;
 }

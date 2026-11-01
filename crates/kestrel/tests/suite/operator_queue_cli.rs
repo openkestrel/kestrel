@@ -293,3 +293,53 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn kestrel_queue_says_each_occupants_phase_on_its_row() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 2).await;
+    let trailing = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.on_the_link(&trailing).await;
+    kestrel.start_on_the_link(&trailing).await;
+    kestrel.report_answered(&trailing, 1).await;
+    let working = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let operator = kestrel.operator();
+    let shown = tokio::task::spawn_blocking(move || {
+        client::ran_on_a_terminal(&operator, &["queue", "--organization", "acme"], 240, "")
+    })
+    .await
+    .expect("the client should run");
+    assert!(shown.status.success(), "{}", shown.said);
+    for (session, phase) in [(&trailing, "trailing"), (&working, "working")] {
+        let row = shown
+            .said
+            .lines()
+            .find(|line| line.contains(&session.name) && line.contains(phase))
+            .unwrap_or_else(|| panic!("no row says {} is {phase}: {}", session.name, shown.said));
+        assert!(!row.contains("waiting"), "{row}");
+    }
+
+    let queue = client(&kestrel, &["queue", "--organization", "acme", "--json"])
+        .await
+        .json();
+    let occupants: Vec<Value> = queue["active_work"]["occupants"]
+        .as_array()
+        .expect("the occupants")
+        .iter()
+        .map(|occupant| json!({ "name": occupant["name"], "phase": occupant["phase"] }))
+        .collect();
+    assert_eq!(
+        occupants,
+        [
+            json!({ "name": trailing.name, "phase": "trailing" }),
+            json!({ "name": working.name, "phase": "working" }),
+        ]
+    );
+
+    kestrel.teardown().await;
+}

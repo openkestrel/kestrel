@@ -3,7 +3,7 @@
 The HTTP API a Client drives the control plane through. Server: `crates/kestrel/src/operator.rs`.
 Contract: `openapi/operator.json` and the files under `openapi/operator/` it refers to
 ([where the document lives](operator-change-workflow.md#where-the-document-lives)), which
-`crates/kestrel/tests/suite/operator.rs` checks against the served routes. This page holds what every route shares: the listener, errors, references and
+`crates/kestrel/tests/suite/operator_boundary.rs` checks against the served routes. This page holds what every route shares: the listener, errors, references and
 declarations. [Setup](operator-setup.md), [sign-ins](operator-sign-ins.md) and
 [reads and streams](operator-reads.md) have their own pages, as do the [Clients](client.md).
 

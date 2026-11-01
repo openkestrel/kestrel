@@ -1,5 +1,5 @@
 //! Retention expiring a sealed Workspace's narration and detail, in bounded batches, rolling back
-//! on failure.
+//! on failure, and the activity summaries a stream carries.
 
 use crate::support;
 

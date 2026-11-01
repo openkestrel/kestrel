@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
+use super::Kestrel;
 use super::client;
 use super::fixture::Fixture;
-use super::Kestrel;
 use kestrel::domain::WorkspaceId;
 use kestrel::operator;
 use reqwest::StatusCode;
