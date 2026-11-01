@@ -1,27 +1,38 @@
 #!/usr/bin/env bash
 # Refuses staged files over 5,000 tokens (bytes / 4). Skips binary files, files marked
 # `linguist-generated` in .gitattributes, and files with a `token-budget-exempt` line there.
+# CI runs it as `.githooks/pre-commit BASE HEAD` to check the files a change added or modified.
 set -euo pipefail
 
 max_tokens=5000
 max_bytes=$((max_tokens * 4))
 over=()
 
+if (($# == 2)); then
+  changed=(git diff --no-renames --numstat -z --diff-filter=AM "$1...$2")
+  attributes=(git check-attr --source "$2")
+  blob="$2:"
+else
+  changed=(git diff --cached --no-renames --numstat -z --diff-filter=AM)
+  attributes=(git check-attr --cached)
+  blob=":"
+fi
+
 while IFS=$'\t' read -r -d '' added _ path; do
   [[ $added == - ]] && continue
-  skip=$(git check-attr --cached linguist-generated token-budget-exempt -- "$path" |
+  skip=$("${attributes[@]}" linguist-generated token-budget-exempt -- "$path" |
     grep -Ev ': (unspecified|unset|false)$' || true)
   [[ -n $skip ]] && continue
-  bytes=$(git cat-file -s ":$path")
+  bytes=$(git cat-file -s "$blob$path")
   if ((bytes > max_bytes)); then
     over+=("$(((bytes + 3) / 4)) tokens  $path")
   fi
-done < <(git diff --cached --no-renames --numstat -z --diff-filter=AM)
+done < <("${changed[@]}")
 
 ((${#over[@]} == 0)) && exit 0
 
 cat >&2 <<MSG
-pre-commit: these staged files are over ${max_tokens} tokens (${max_bytes} bytes, tokens = bytes / 4):
+pre-commit: these files are over ${max_tokens} tokens (${max_bytes} bytes, tokens = bytes / 4):
 
 $(printf '  %s\n' "${over[@]}")
 

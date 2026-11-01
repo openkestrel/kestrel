@@ -62,12 +62,11 @@ other agents, so each local cargo run has a real cost.
 - Batch edits before checking; one check after a coherent change, never one per line.
 - Before pushing, `cargo fmt --all`. Leave the workspace suite and the `#[ignore]`d
   suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;
-  then read what failed with `gh pr checks` and `gh run view --log-failed`. A branch that conflicts
-  with `main` gets no `pull_request` run at all, so `gh pr checks` shows no `gate` row; `gate`
-  appearing is the sign the run started, and merging `main` and pushing until it does is the way
-  there.
-  For completed failed-job logs while the run is still active, or logs rejected for terminal escape
-  sequences, see [CI diagnosis](docs/agents/ci-diagnosis.md).
+  then wait on CI and read what failed with one background command,
+  `mise exec -- python3 scripts/ci-failed-logs.py --pr <number> --wait`
+  ([CI diagnosis](docs/agents/ci-diagnosis.md)). A branch that conflicts with `main` gets no
+  `pull_request` run at all, so `gh pr checks` shows no `gate` row; `gate` appearing is the sign
+  the run started, and merging `main` and pushing until it does is the way there.
 - **Flaky**, or failing where your change cannot reach? Record it before any re-run:
   [flakes](docs/agents/flakes.md).
 - Documentation, skill and agent-guidance changes need no local check.
@@ -99,7 +98,7 @@ top pull request; the rest is in `docs/agents/issue-tracker.md`.
 
 A pull request that changes what the browser Client shows carries screenshots, and a recording when
 something moves, in its Evidence section. [Visual evidence](docs/agents/visual-evidence.md) says
-what to show, how to capture it with `playwright-cli` from a paused e2e spec, and how to upload it
+what to show, how to capture it from a copy of an e2e spec, and how to upload it
 with `gh pr edit --attach`.
 
 ### Debug info
