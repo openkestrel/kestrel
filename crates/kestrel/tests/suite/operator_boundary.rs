@@ -136,6 +136,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::ORGANIZATIONS, "get"),
         (operator::ORGANIZATIONS, "post"),
         (operator::STARTS, "post"),
+        (operator::START_PREVIEW, "post"),
         (operator::REPOSITORY_RESOLUTIONS, "post"),
         (operator::PROJECTS, "get"),
         (operator::PROJECTS, "post"),

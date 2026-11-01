@@ -118,8 +118,10 @@ candidates as `{id, name}` rather than formatting them into the message.
   transaction, with an optional Brief, declared model, mode, thought level and declared name, or
   refuses and leaves nothing behind ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md),
   `workspace.rs`). A refusal names the request `field` it concerns.
-- `POST /operator/starts` backs `kestrel start`: it adds whatever is missing to run a first Session
-  and refuses to change anything that exists (`start.rs`). It opens through the same write.
+- `POST /operator/starts` backs `kestrel start` and the browser's first Session: it adds whatever
+  is missing to run a first Session and refuses to change anything that exists (`start.rs`). It
+  opens through the same write. `POST /operator/starts/preview` resolves the same plan writing
+  nothing; [the start plan](operator-setup.md#the-start-plan) has both.
 - `session enqueue` only continues a Workspace: it refuses one that has never had a Session.
 - A Project's repositories go through one resolver (`repository.rs`) on each of the three paths
   that declare one. It checks syntax only, expands `owner/repo` and `github.com/owner/repo` to
@@ -128,7 +130,7 @@ candidates as `{id, name}` rather than formatting them into the message.
   contacts no source, so a checkout failure still arrives as supervisor evidence
   ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)).
   `POST /operator/repository-resolutions` exposes the resolver to Clients without declaring
-  anything. `kestrel start` calls it before planning, so it matches Projects by resolved address.
+  anything. A start plan resolves its repositories through the same resolver.
   `purpose: public_setup` accepts HTTPS addresses only and warns that no App-backed push follows.
 - A Project declaration selects an Integration per repository with `integrations:
   [{repository, integration}]`; nothing else selects one, neither a GitHub address nor an Event

@@ -996,6 +996,8 @@ impl AsRef<str> for StreamSubscriptionKind {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Started {
     pub agent: Settled,
+    ///Whether this start is the one that completed initial setup.
+    pub completed_initial_setup: bool,
     pub organization: Settled,
     pub project: Settled,
     pub session: Session,
@@ -1008,79 +1010,290 @@ pub struct Settled {
     pub name: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StartPlan {
-    pub agent: AgentDeclaration,
-    ///The Brief the Workspace starts with, handed to the agent exactly as given.
-    ///Constraint: minLength=1
-    pub brief: String,
-    ///Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<Vec<StartPlanCredentialsItem>>,
-    ///Constraint: minLength=1
-    pub organization: String,
-    pub project: ProjectDeclaration,
-}
-impl StartPlan {
-    /// Construct this request with every required wire field.
-    pub fn new(
-        agent: AgentDeclaration,
-        brief: String,
-        organization: String,
-        project: ProjectDeclaration,
-    ) -> Self {
-        Self {
-            agent,
-            brief,
-            organization,
-            project,
-            credentials: None,
-        }
-    }
-    /// Start a dependency-free builder with every required wire field.
-    pub fn builder(
-        agent: AgentDeclaration,
-        brief: String,
-        organization: String,
-        project: ProjectDeclaration,
-    ) -> StartPlanBuilder {
-        StartPlanBuilder::new(agent, brief, organization, project)
-    }
-}
-/// Dependency-free builder for [`#struct_name`].
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct StartPlanBuilder {
-    value: StartPlan,
-}
-impl StartPlanBuilder {
-    /// Start a builder with every required wire field.
-    pub fn new(
-        agent: AgentDeclaration,
-        brief: String,
-        organization: String,
-        project: ProjectDeclaration,
-    ) -> Self {
-        Self {
-            value: StartPlan::new(agent, brief, organization, project),
-        }
-    }
-    #[doc = concat!("Set the optional `", "credentials", "` request field.")]
-    #[must_use]
-    pub fn credentials(mut self, credentials: Vec<StartPlanCredentialsItem>) -> Self {
-        self.value.credentials = Some(credentials);
-        self
-    }
-    /// Finish building the request model.
-    pub fn build(self) -> StartPlan {
-        self.value
-    }
+pub struct StartPreview {
+    pub agent: StartValue,
+    ///The base branch. Each Workspace works on a branch of its own, which it names when it opens, starting from this one.
+    pub branch: Option<StartValue>,
+    ///What a start of this plan would do, in order: the declarations it adds or reuses, the credentials it holds, and the Workspace it opens.
+    pub declarations: Vec<StartDeclaration>,
+    ///Every setup prerequisite the plan's path lacks, in repair order, then every existing declaration the plan would change.
+    pub gaps: Vec<Diagnostic>,
+    pub harness: StartValue,
+    ///As `Install` reads it.
+    pub initial_setup_complete: bool,
+    ///Every input the plan needs and could not resolve, each naming its plan `field`.
+    pub missing: Vec<Diagnostic>,
+    pub model: StartValue,
+    pub organization: Option<StartValue>,
+    ///`blocked` when `gaps` holds a setup prerequisite or a declaration the start would change. `incomplete` when none does but `missing` holds an input the plan needs. `unavailable` when neither holds anything but an inspection in `unavailable` failed. `ready` when a start of this plan would be attempted.
+    pub outcome: StartPreviewOutcome,
+    pub profile: StartValue,
+    pub project: Option<StartValue>,
+    pub repositories: Option<StartRepositories>,
+    pub saved: ReadinessSaved,
+    ///The saved sign-in the Session would be handed, when exactly one is established. Never its material.
+    pub sign_in: Option<SavedSignIn>,
+    pub sign_in_method: StartValue,
+    pub unavailable: Vec<Diagnostic>,
+    pub warnings: Vec<Diagnostic>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StartPlanCredentialsItem {
+pub struct StartValue {
+    ///The declared record the value was read from, where it was read from one.
+    pub record: Option<String>,
+    pub source: StartSource,
+    pub value: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartRepositories {
+    pub record: Option<String>,
+    pub source: StartSource,
+    pub value: Vec<ResolvedRepository>,
+}
+///Where a value came from. `project` and `agent` name the declared record in `record`; `clone_origin` is a Project found declaring the clone's origin when `record` names one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum StartSource {
+    #[default]
+    #[serde(rename = "given")]
+    Given,
+    #[serde(rename = "clone_origin")]
+    CloneOrigin,
+    #[serde(rename = "clone_default_branch")]
+    CloneDefaultBranch,
+    #[serde(rename = "clone_checked_out")]
+    CloneCheckedOut,
+    #[serde(rename = "only_organization")]
+    OnlyOrganization,
+    #[serde(rename = "project")]
+    Project,
+    #[serde(rename = "only_agent")]
+    OnlyAgent,
+    #[serde(rename = "agent")]
+    Agent,
+    #[serde(rename = "named_for_repository")]
+    NamedForRepository,
+    #[serde(rename = "named_for_harness")]
+    NamedForHarness,
+    #[serde(rename = "saved_sign_in")]
+    SavedSignIn,
+    #[serde(rename = "operator_profile")]
+    OperatorProfile,
+    #[serde(rename = "default")]
+    Default,
+}
+impl StartSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Given => "given",
+            Self::CloneOrigin => "clone_origin",
+            Self::CloneDefaultBranch => "clone_default_branch",
+            Self::CloneCheckedOut => "clone_checked_out",
+            Self::OnlyOrganization => "only_organization",
+            Self::Project => "project",
+            Self::OnlyAgent => "only_agent",
+            Self::Agent => "agent",
+            Self::NamedForRepository => "named_for_repository",
+            Self::NamedForHarness => "named_for_harness",
+            Self::SavedSignIn => "saved_sign_in",
+            Self::OperatorProfile => "operator_profile",
+            Self::Default => "default",
+        }
+    }
+}
+impl ::std::fmt::Display for StartSource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for StartSource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+///`blocked` when `gaps` holds a setup prerequisite or a declaration the start would change. `incomplete` when none does but `missing` holds an input the plan needs. `unavailable` when neither holds anything but an inspection in `unavailable` failed. `ready` when a start of this plan would be attempted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum StartPreviewOutcome {
+    #[default]
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "incomplete")]
+    Incomplete,
+    #[serde(rename = "blocked")]
+    Blocked,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+impl StartPreviewOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Incomplete => "incomplete",
+            Self::Blocked => "blocked",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+impl ::std::fmt::Display for StartPreviewOutcome {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for StartPreviewOutcome {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+///What a Client gives a start. Every field may be omitted from a preview; a start needs whatever the plan cannot resolve without it. A value given here always wins over one the control plane would infer.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct StartPlan {
+    ///Omitted, the only Agent when no harness or model is given, then one named for its harness.
     ///Constraint: minLength=1
-    pub secret: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    ///The base branch each Workspace's own branch starts from. Omitted, the Project's, then the clone's.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    ///The Brief the Workspace starts with, handed to the agent exactly as given.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clone: Option<StartClone>,
+    ///Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable. A preview needs only the variable; a start needs each secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<Vec<StartCredential>>,
+    ///Omitted, the Agent's, then the one harness a usable saved sign-in serves, then kestrel's default.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    ///The Integration each repository of a Project the start declares selects. Omitted, a Project it reuses keeps its own, and one it declares selects none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<RepositoryIntegrationSelection>>,
+    ///Omitted, the Agent's, then its harness's default.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    ///Omitted, the only Organization.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    ///The Subscription Profile the Session uses. Omitted, the Operator's own Profile holding a subscription for the harness, then the Organization's Provider Credentials.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    ///Omitted, the Project declaring the repositories, then one named for the first repository.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    ///Resolved as a Project declaration resolves them. Omitted, the named Project's, then the clone's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repositories: Option<Vec<String>>,
+    ///The catalogued Sign-in Method the Session is handed, withholding the harness's other catalogued sign-ins.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in_method: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartCredential {
+    ///Never returned, and never needed by a preview.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
     ///Constraint: minLength=1
     pub variable: String,
+}
+///What a Client found in the local clone it runs in, since the control plane runs no git. Each value is used only where nothing given or declared says otherwise.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartClone {
+    ///The branch checked out, used when origin names no default.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_out: Option<String>,
+    ///The branch origin names as its default.
+    ///Constraint: minLength=1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    ///The clone's origin, as git reports it.
+    ///Constraint: minLength=1
+    pub repository: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartDeclaration {
+    pub action: StartDeclarationAction,
+    pub kind: StartDeclarationKind,
+    ///Null for the Workspace, which is named when it opens.
+    pub name: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum StartDeclarationKind {
+    #[default]
+    #[serde(rename = "organization")]
+    Organization,
+    #[serde(rename = "project")]
+    Project,
+    #[serde(rename = "agent")]
+    Agent,
+    #[serde(rename = "provider_credential")]
+    ProviderCredential,
+    #[serde(rename = "workspace")]
+    Workspace,
+}
+impl StartDeclarationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Organization => "organization",
+            Self::Project => "project",
+            Self::Agent => "agent",
+            Self::ProviderCredential => "provider_credential",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+impl ::std::fmt::Display for StartDeclarationKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for StartDeclarationKind {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum StartDeclarationAction {
+    #[default]
+    #[serde(rename = "declare")]
+    Declare,
+    #[serde(rename = "reuse")]
+    Reuse,
+    #[serde(rename = "hold")]
+    Hold,
+    #[serde(rename = "replace")]
+    Replace,
+    #[serde(rename = "open")]
+    Open,
+}
+impl StartDeclarationAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Declare => "declare",
+            Self::Reuse => "reuse",
+            Self::Hold => "hold",
+            Self::Replace => "replace",
+            Self::Open => "open",
+        }
+    }
+}
+impl ::std::fmt::Display for StartDeclarationAction {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for StartDeclarationAction {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 ///One explicit test of saved material. What it established is specific to the revision, harness, model and image named here, and to no aliased harness or other model.
 #[derive(Debug, Clone, Deserialize, Serialize)]

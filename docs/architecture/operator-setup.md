@@ -14,8 +14,32 @@ in the same transaction; naming does not complete initial setup.
 
 `GET /operator/install` answers `{ initial_setup_complete }` whether or not an Operator is named.
 It is a row in `install`, false on a new install and independent of readiness and of what is
-declared. Nothing sets it yet: naming, a saved sign-in, an open and an enqueue never do, and the
-shared start will with its first committed Workspace and Session.
+declared. Only `POST /operator/starts` sets it, in the transaction that commits its Workspace and
+enqueued Session, so a refused or failed start leaves it false and concurrent starts insert it
+once. Naming, a saved sign-in, an open and an enqueue never do, and nothing clears it.
+
+## The start plan
+
+`POST /operator/starts/preview` and `POST /operator/starts` resolve one plan (`start/plan.rs`,
+`start/resolving.rs`). A value given wins; otherwise the declared record, then the clone the
+Client reports in `clone`, since the control plane runs no git; then the only Organization or
+Agent, a name derived from the repository or harness, the one harness a usable saved sign-in
+serves, and kestrel's default. Each resolved value carries its `source` and the `record` it was
+read from. The path's sign-in is readiness's own (`start_readiness::assessed`) with the resolved
+harness and model, and the Profile and method are what `workspace::operators_own` would choose.
+
+- **Preview** answers 200 for any well-formed plan with every `missing` input, every `gap`, and
+  the `declarations` a start would add, reuse, hold or open. It reads Store and inspects the
+  image only: repositories go through the syntax-only resolver and existing Projects and Agents
+  are compared in memory (`declaration::start_project_conflict`, `start_agent_conflict`). A
+  repository no declaration could hold or a method no harness offers is still a 422.
+- **Gaps** are readiness's, less what a start satisfies itself: repository and Project gaps
+  (the start declares its Project), a missing sign-in when the plan holds a key that fills the
+  harness's method, and a missing sign-in where no Organization resolved. A declaration the plan
+  would change follows them.
+- **A start** resolves the plan again from what exists then and refuses the first conflict, gap
+  (`start::Blocked`, a 409 `setup_gap`) or missing input. GitHub checks run before its
+  transaction; the transaction re-refuses changed declarations, and records completion.
 
 ## Readiness
 

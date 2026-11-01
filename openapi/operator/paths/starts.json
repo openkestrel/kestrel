@@ -1,0 +1,62 @@
+{
+  "starts": {
+    "post": {
+      "operationId": "start",
+      "summary": "Take a control plane from its saved setup to a Session carrying a Brief, in one step.",
+      "description": "Resolves the plan exactly as `previewStart` does, from what exists now, and refuses one that is incomplete or blocked with the first missing input or gap. A complete plan declares the Organization, Project and Agent it resolved where they do not exist, reuses the ones that match, holds the Provider Credentials it carries, opens a Workspace with the Brief and enqueues its Session, and records initial setup complete, all in one transaction: a refused or failed start leaves none of it behind, while setup saved before it remains. A start never changes a declaration that exists; one that differs is refused with the field it differs on. A Project with selected Integrations passes the same App check as declaring one before the transaction opens. The Agent's harness passes the same image capability check as declaring an Agent. Initial setup completes on the first start that commits; a later start, or a Session that fails afterwards, never changes it.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "../schemas/starts.json#/StartPlan" }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "description": "What the plan settled on, and the Workspace and Session it reached.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "../schemas/starts.json#/Started" }
+            }
+          }
+        },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  },
+  "starts-preview": {
+    "post": {
+      "operationId": "previewStart",
+      "summary": "Resolve a partial start plan, writing nothing.",
+      "description": "Answers 200 for any well-formed plan, however incomplete: every value the plan resolves and where it came from, the sign-in the start would hand its Session, the setup already saved, what a start would declare, reuse, hold and open, and every missing input and gap that could be established rather than the first. It reads Store and inspects the image and nothing else: no provider or GitHub is asked, no relay started, nothing written, and no secret returned. A preview grants nothing and promises no checkout: a start resolves the plan again from what exists then. A malformed plan, such as a repository no declaration could hold or a Sign-in Method no harness offers, is refused as it would be by a start.",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "../schemas/starts.json#/StartPlan" }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "The plan as a start would resolve it now.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "../schemas/starts.json#/StartPreview" }
+            }
+          }
+        },
+        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
+        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
+      }
+    }
+  }
+}

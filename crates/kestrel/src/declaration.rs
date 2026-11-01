@@ -1002,20 +1002,7 @@ pub async fn place_agent(
     if matches!(on_existing, OnExisting::Refuse)
         && let Some(found) = found
     {
-        refuse_on_change(
-            &change,
-            format!(
-                "the agent {} is declared on the harness {} with the model {}, and a start \
-                 changes no declaration",
-                found.name,
-                found.harness,
-                found
-                    .declared
-                    .model
-                    .as_deref()
-                    .unwrap_or("its harness's default")
-            ),
-        )?;
+        refuse_on_change(&change, agent_refusal(found))?;
     }
     let placed = tx
         .agents()
@@ -1027,6 +1014,67 @@ pub async fn place_agent(
         )
         .await?;
     Ok((placed, change))
+}
+
+/// What a start that found this Project declared would be refused with, asking GitHub nothing.
+pub fn start_project_conflict(
+    found: &crate::domain::Project,
+    repositories: &[String],
+    selected: Vec<(&str, &str)>,
+    branch: &str,
+) -> Result<()> {
+    let (action, differences) = compared(
+        Some(described_project(
+            &found.repositories,
+            found
+                .integrations
+                .iter()
+                .map(|selected| (selected.repository.as_str(), selected.name.as_str()))
+                .collect(),
+            &found.branch,
+        )),
+        described_project(repositories, selected, branch),
+    );
+    let change = Declaration {
+        kind: Kind::Project,
+        name: found.name.clone(),
+        action,
+        differences,
+    };
+    refuse_on_change(&change, project_refusal(found))
+}
+
+/// What a start that found this Agent declared would be refused with.
+pub fn start_agent_conflict(
+    found: &crate::domain::Agent,
+    harness: &str,
+    declared: &Declared,
+) -> Result<()> {
+    let (action, differences) = compared(
+        Some(described_agent(&found.harness, &found.declared)),
+        described_agent(harness, &Declared::named(declared.clone())),
+    );
+    let change = Declaration {
+        kind: Kind::Agent,
+        name: found.name.clone(),
+        action,
+        differences,
+    };
+    refuse_on_change(&change, agent_refusal(found))
+}
+
+fn agent_refusal(found: &crate::domain::Agent) -> String {
+    format!(
+        "the agent {} is declared on the harness {} with the model {}, and a start changes no \
+         declaration",
+        found.name,
+        found.harness,
+        found
+            .declared
+            .model
+            .as_deref()
+            .unwrap_or("its harness's default")
+    )
 }
 
 fn project_refusal(found: &crate::domain::Project) -> String {

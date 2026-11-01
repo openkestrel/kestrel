@@ -50,6 +50,7 @@ async fn an_unchanged_declaration_repeated_answers_the_record_it_made() {
 #[tokio::test]
 async fn a_start_declares_its_setup_and_reaches_a_session_carrying_its_brief() {
     let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
 
     let (status, started) = declared(
         &kestrel,
@@ -82,8 +83,16 @@ async fn a_start_declares_its_setup_and_reaches_a_session_carrying_its_brief() {
     );
     assert_eq!(
         transcript[1].entry,
+        Entry::ParticipantJoined {
+            participant: "ada".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[2].entry,
         Entry::Brief {
-            source: BriefSource::Operator { participant: None },
+            source: BriefSource::Operator {
+                participant: Some("ada".to_owned()),
+            },
             brief: "Fix the flaky test".to_owned(),
         }
     );

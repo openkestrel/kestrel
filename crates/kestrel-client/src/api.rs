@@ -56,6 +56,16 @@ impl ControlPlane {
             .await
     }
 
+    /// A POST that changes nothing, such as a preview, so a refusal may still offer its steps.
+    pub async fn inspect_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
+        self.answered(self.client.post(self.url(path)?).json(body), false)
+            .await
+    }
+
     pub async fn put_as<T: DeserializeOwned>(
         &self,
         path: &[&str],

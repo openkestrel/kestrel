@@ -55,7 +55,9 @@ use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
 use crate::trigger;
-use crate::{instance, pull_request, start, work, workspace};
+use crate::{instance, pull_request, work, workspace};
+
+mod starts;
 
 pub const ROOT: &str = "/";
 pub const HARNESSES: &str = "/operator/harnesses";
@@ -65,6 +67,7 @@ pub const READINESS: &str = "/operator/readiness";
 pub const OPERATOR: &str = "/operator/operator";
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
+pub const START_PREVIEW: &str = "/operator/starts/preview";
 pub const REPOSITORY_RESOLUTIONS: &str = "/operator/repository-resolutions";
 pub const PROJECTS: &str = "/operator/organizations/{organization}/projects";
 pub const AGENTS: &str = "/operator/organizations/{organization}/agents";
@@ -419,7 +422,8 @@ pub fn router(
         .route(READINESS, get(show_readiness))
         .route(OPERATOR, get(show_operator).put(name_operator))
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
-        .route(STARTS, post(start))
+        .route(STARTS, post(starts::start))
+        .route(START_PREVIEW, post(starts::preview))
         .route(REPOSITORY_RESOLUTIONS, post(resolve_repositories))
         .route(PROJECTS, get(projects).post(declare_project))
         .route(AGENTS, get(agents).post(declare_agent))
@@ -1531,79 +1535,6 @@ impl From<Trigger> for wire::Trigger {
             declared_at: trigger.declared_at.to_string(),
         }
     }
-}
-
-async fn start(
-    State(control_plane): State<ControlPlane>,
-    plan: Result<Json<wire::StartPlan>, JsonRejection>,
-) -> Result<(StatusCode, Json<wire::Started>), Refused> {
-    let Json(plan) = plan?;
-    let plan = start::Plan {
-        organization: plan.organization,
-        brief: plan.brief,
-        project: declaration::Project {
-            name: plan.project.name,
-            repositories: plan.project.repositories,
-            branch: plan.project.branch,
-            integrations: plan
-                .project
-                .integrations
-                .unwrap_or_default()
-                .into_iter()
-                .map(|selection| crate::repository::Selection {
-                    repository: selection.repository,
-                    integration: selection.integration,
-                })
-                .collect(),
-        },
-        agent: declaration::Agent {
-            name: plan.agent.name,
-            harness: plan.agent.harness,
-            model: plan.agent.model.flatten(),
-            mode: plan.agent.mode.flatten(),
-            thought_level: plan.agent.thought_level.flatten(),
-        },
-        credentials: plan
-            .credentials
-            .unwrap_or_default()
-            .into_iter()
-            .map(|credential| start::Credential {
-                variable: credential.variable,
-                secret: credential.secret,
-            })
-            .collect(),
-    };
-    let started = start::start(
-        &control_plane.store,
-        &control_plane.images,
-        &Github::unfenced(control_plane.store.clock())?,
-        &plan,
-    )
-    .await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(wire::Started {
-            organization: wire::Settled {
-                name: started.organization.name,
-                created: started.organization.created,
-            },
-            project: wire::Settled {
-                name: started.project.name,
-                created: started.project.created,
-            },
-            agent: wire::Settled {
-                name: started.agent.name,
-                created: started.agent.created,
-            },
-            workspace: workspace_record(&control_plane.store, started.workspace).await?,
-            session: session_record(
-                started.session,
-                &plan.organization,
-                &control_plane.live.summaries,
-            ),
-        }),
-    ))
 }
 
 async fn resolve_repositories(
@@ -5996,6 +5927,18 @@ impl From<anyhow::Error> for Refused {
             }
             Err(error) => error,
         };
+        let error = match error.downcast::<crate::start::Blocked>() {
+            Ok(blocked) => {
+                return Refused::Diagnosed {
+                    status: StatusCode::CONFLICT,
+                    diagnostic: Box::new(readiness_gap(
+                        blocked.gap,
+                        blocked.organization.as_deref(),
+                    )),
+                };
+            }
+            Err(error) => error,
+        };
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
             Ok(Declined::Missing(why) | Declined::Ambiguous(why)) => Refused::NotFound(why),
@@ -6166,6 +6109,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("GET", ORGANIZATIONS) => "list_organizations",
         ("POST", ORGANIZATIONS) => "declare_organization",
         ("POST", STARTS) => "start",
+        ("POST", START_PREVIEW) => "preview_start",
         ("POST", REPOSITORY_RESOLUTIONS) => "resolve_repositories",
         ("GET", PROJECTS) => "list_projects",
         ("POST", PROJECTS) => "declare_project",

@@ -69,37 +69,6 @@
       }
     }
   },
-  "starts": {
-    "post": {
-      "operationId": "start",
-      "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
-      "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. A Project it declares with selected Integrations passes the same App check as declaring one, before anything is written, and needs its Organization to exist already. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
-      "requestBody": {
-        "required": true,
-        "content": {
-          "application/json": {
-            "schema": { "$ref": "../schemas/organizations.json#/StartPlan" }
-          }
-        }
-      },
-      "responses": {
-        "201": {
-          "description": "What the plan settled on, and the Workspace and Session it reached.",
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "../schemas/organizations.json#/Started" }
-            }
-          }
-        },
-        "400": { "$ref": "../../operator.json#/components/responses/Refused" },
-        "403": { "$ref": "../../operator.json#/components/responses/Refused" },
-        "404": { "$ref": "../../operator.json#/components/responses/Refused" },
-        "409": { "$ref": "../../operator.json#/components/responses/Refused" },
-        "422": { "$ref": "../../operator.json#/components/responses/Refused" },
-        "503": { "$ref": "../../operator.json#/components/responses/Refused" }
-      }
-    }
-  },
   "repository-resolutions": {
     "post": {
       "operationId": "resolveRepositories",

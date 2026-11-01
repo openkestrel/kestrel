@@ -393,56 +393,6 @@
       "thought_level"
     ]
   },
-  "StartPlan": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "organization": { "type": "string", "minLength": 1 },
-      "project": { "$ref": "#/ProjectDeclaration" },
-      "agent": { "$ref": "#/AgentDeclaration" },
-      "brief": {
-        "type": "string",
-        "minLength": 1,
-        "description": "The Brief the Workspace starts with, handed to the agent exactly as given."
-      },
-      "credentials": {
-        "type": "array",
-        "description": "Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable.",
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "variable": { "type": "string", "minLength": 1 },
-            "secret": { "type": "string", "minLength": 1 }
-          },
-          "required": ["variable", "secret"]
-        }
-      }
-    },
-    "required": ["organization", "project", "agent", "brief"]
-  },
-  "Settled": {
-    "type": "object",
-    "properties": {
-      "name": { "type": "string" },
-      "created": {
-        "type": "boolean",
-        "description": "Whether the start declared it, rather than finding it declared."
-      }
-    },
-    "required": ["name", "created"]
-  },
-  "Started": {
-    "type": "object",
-    "properties": {
-      "organization": { "$ref": "#/Settled" },
-      "project": { "$ref": "#/Settled" },
-      "agent": { "$ref": "#/Settled" },
-      "workspace": { "$ref": "workspaces.json#/Workspace" },
-      "session": { "$ref": "sessions.json#/Session" }
-    },
-    "required": ["organization", "project", "agent", "workspace", "session"]
-  },
   "Opened": {
     "type": "object",
     "description": "A Workspace and the first Session its open enqueued, in one transaction.",

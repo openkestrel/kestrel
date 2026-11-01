@@ -1,33 +1,10 @@
+//! What only the Client can see for a start, the local clone and its own environment, and how
+//! the control plane's plan reads on a terminal.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Result;
 use kestrel_operator_types as wire;
-
-use crate::scope::{Scope, Source};
-
-const DEFAULT_HARNESS: &str = "opencode";
-
-#[derive(Default)]
-pub struct Given {
-    pub repositories: Vec<String>,
-    pub branch: Option<String>,
-    pub project: Option<String>,
-    pub agent: Option<String>,
-    pub harness: Option<String>,
-    pub model: Option<String>,
-    pub credentials: Vec<String>,
-}
-
-#[derive(Default)]
-pub struct Existing {
-    pub organization_declared: bool,
-    pub projects: Vec<Project>,
-    /// The Projects whose first repository the clone's origin names, when the clone was asked.
-    pub declaring: Option<Vec<String>>,
-    pub agents: Vec<Agent>,
-    pub credentials: Vec<String>,
-}
 
 #[derive(Default)]
 pub struct LocalClone {
@@ -35,111 +12,6 @@ pub struct LocalClone {
     pub origin: Option<String>,
     pub default_branch: Option<String>,
     pub checked_out: Option<String>,
-}
-
-impl Existing {
-    pub fn read(
-        organization_declared: bool,
-        projects: wire::ListProjectsResponse,
-        agents: wire::ListAgentsResponse,
-        credentials: wire::ListProviderCredentialsResponse,
-    ) -> Self {
-        Self {
-            organization_declared,
-            declaring: None,
-            projects: projects
-                .into_iter()
-                .map(|record| Project {
-                    name: record.name,
-                    repositories: record.repositories,
-                    integrations: record
-                        .integrations
-                        .into_iter()
-                        .map(|selected| wire::RepositoryIntegrationSelection {
-                            repository: selected.repository,
-                            integration: selected.integration,
-                        })
-                        .collect(),
-                    branch: record.branch,
-                })
-                .collect(),
-            agents: agents
-                .into_iter()
-                .map(|record| Agent {
-                    name: record.name,
-                    harness: record.harness,
-                    model: record.model,
-                })
-                .collect(),
-            credentials: credentials
-                .into_iter()
-                .map(|record| record.variable)
-                .collect(),
-        }
-    }
-}
-
-pub struct Project {
-    pub name: String,
-    pub repositories: Vec<String>,
-    /// As declared, and sent back unchanged: a start selects none of its own.
-    pub integrations: Vec<wire::RepositoryIntegrationSelection>,
-    pub branch: String,
-}
-
-pub struct Agent {
-    pub name: String,
-    pub harness: String,
-    pub model: Option<String>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Inferred<T> {
-    pub value: T,
-    pub because: String,
-    pub given: bool,
-}
-
-fn flagged<T>(value: T, flag: &str) -> Inferred<T> {
-    Inferred {
-        value,
-        because: format!("given as {flag}"),
-        given: true,
-    }
-}
-
-fn inferred<T>(value: T, because: impl Into<String>) -> Inferred<T> {
-    Inferred {
-        value,
-        because: because.into(),
-        given: false,
-    }
-}
-
-pub struct Explained<'a> {
-    pub what: &'static str,
-    pub value: String,
-    pub because: &'a str,
-    pub given: bool,
-    pub flag: &'static str,
-}
-
-pub struct Plan {
-    pub organization: Inferred<String>,
-    pub repositories: Inferred<Vec<String>>,
-    integrations: Vec<wire::RepositoryIntegrationSelection>,
-    pub project: Inferred<String>,
-    pub branch: Inferred<String>,
-    pub agent: Inferred<String>,
-    pub harness: Inferred<String>,
-    pub model: Inferred<Option<String>>,
-    pub credentials: Inferred<Vec<String>>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Missing {
-    pub flag: &'static str,
-    pub because: String,
 }
 
 impl LocalClone {
@@ -177,846 +49,384 @@ impl LocalClone {
             checked_out: git(&["symbolic-ref", "--quiet", "--short", "HEAD"]),
         }
     }
-}
 
-/// A repository's owner never names an Organization: with one it is the scope, and with several,
-/// guessing would land work in an Organization nobody named (ADR-0016, ADR-0049).
-pub fn organization(
-    named: Option<Scope>,
-    existing: &[String],
-) -> Result<Inferred<String>, Missing> {
-    match named {
-        Some(scope) => Ok(match &scope.source {
-            Source::Flag => flagged(scope.organization, "--organization"),
-            Source::Environment => flagged(scope.organization, crate::ORGANIZATION_VARIABLE),
-            Source::Binding(binding) => {
-                let because = format!("bound by {}", binding.display());
-                inferred(scope.organization, because)
-            }
-            Source::OnlyOrganization => inferred(scope.organization, "the only Organization"),
-        }),
-        None => Err(Missing {
-            flag: "--organization",
-            because: format!(
-                "{} Organizations exist, and none is in scope: {}",
-                existing.len(),
-                existing.join(", ")
-            ),
-        }),
-    }
-}
-
-/// Every value past the Organization, which is resolved first because what exists in it is
-/// evidence for the rest.
-pub fn plan(
-    organization: Inferred<String>,
-    given: Given,
-    clone: &LocalClone,
-    existing: &Existing,
-) -> Result<Plan, Vec<Missing>> {
-    let Existing {
-        projects,
-        declaring,
-        agents,
-        ..
-    } = existing;
-    let mut missing = Vec::new();
-
-    let find = |name: &str| projects.iter().find(|declared| declared.name == name);
-    let named_project = given.project.as_deref().and_then(find);
-    let matched = match declaring.as_deref() {
-        Some([name]) => find(name),
-        _ => None,
-    };
-    let ambiguous = declaring.as_ref().is_some_and(|names| names.len() > 1);
-    let repositories = if !given.repositories.is_empty() {
-        Some(flagged(given.repositories, "--repository"))
-    } else if let Some(named) = named_project {
-        Some(inferred(
-            named.repositories.clone(),
-            format!("what {} is declared against", named.name),
-        ))
-    } else {
-        match (&clone.root, &clone.origin) {
-            (Some(root), Some(origin)) => {
-                let cloned = format!("origin of the clone at {}", root.display());
-                if let Some(project) = matched {
-                    Some(inferred(
-                        project.repositories.clone(),
-                        format!(
-                            "what {} is declared against, beginning with the {cloned}",
-                            project.name
-                        ),
-                    ))
-                } else {
-                    if ambiguous {
-                        missing.push(Missing {
-                            flag: "--project",
-                            because: format!(
-                                "the projects {} each begin with the {cloned}",
-                                declaring.as_deref().unwrap_or_default().join(", ")
-                            ),
-                        });
-                    }
-                    Some(inferred(vec![origin.clone()], cloned))
-                }
-            }
-            (Some(root), None) => {
-                missing.push(Missing {
-                    flag: "--repository",
-                    because: format!("the clone at {} has no origin remote", root.display()),
-                });
-                None
-            }
-            (None, _) => {
-                missing.push(Missing {
-                    flag: "--repository",
-                    because: "the working directory is in no git clone".to_owned(),
-                });
-                None
-            }
-        }
-    };
-
-    let declaring = matched.or_else(|| {
-        repositories.as_ref().and_then(|repositories| {
-            projects
-                .iter()
-                .find(|project| project.repositories == repositories.value)
+    /// The clone's facts as the plan takes them; nothing is sent without an origin.
+    pub fn sent(&self) -> Option<wire::StartClone> {
+        self.origin.as_ref().map(|origin| wire::StartClone {
+            repository: origin.clone(),
+            default_branch: self.default_branch.clone(),
+            checked_out: self.checked_out.clone(),
         })
-    });
-    let project = match (given.project, declaring, &repositories) {
-        (Some(project), _, _) => Some(flagged(project, "--project")),
-        (None, None, _) if ambiguous => None,
-        (None, Some(declaring), Some(repositories)) => Some(inferred(
-            declaring.name.clone(),
-            format!("already declares {}", repositories.value.join(", ")),
-        )),
-        (None, None, Some(repositories)) => {
-            let name = repository_name(&repositories.value[0]);
-            if projects.iter().any(|declared| declared.name == name) {
-                missing.push(Missing {
-                    flag: "--project",
-                    because: format!(
-                        "the project {name} is declared against other repositories, and a \
-                         start changes no declaration"
-                    ),
-                });
-            }
-            Some(inferred(name.to_owned(), "named for its repository"))
-        }
-        (None, _, None) => None,
-    };
-    let named = project.as_ref().and_then(|project| {
-        projects
-            .iter()
-            .find(|declared| declared.name == project.value)
-    });
+    }
 
-    let integrations = named
-        .zip(repositories.as_ref())
-        .filter(|(named, repositories)| named.repositories == repositories.value)
-        .map(|(named, _)| named.integrations.clone())
-        .unwrap_or_default();
-
-    let branch = match (given.branch, named) {
-        (Some(branch), _) => Some(flagged(branch, "--branch")),
-        (None, Some(named)) => Some(inferred(
-            named.branch.clone(),
-            format!("the branch {} works on", named.name),
-        )),
-        (None, None) => match (&clone.default_branch, &clone.checked_out) {
-            (Some(branch), _) => Some(inferred(branch.clone(), "origin's default branch")),
-            (None, Some(branch)) => Some(inferred(
-                branch.clone(),
-                "checked out, and origin names no default branch",
+    /// Why the clone supplied no repository, for the flag that would.
+    pub fn silent(&self) -> Option<String> {
+        match (&self.root, &self.origin) {
+            (Some(root), None) => Some(format!(
+                "the clone at {} has no origin remote",
+                root.display()
             )),
-            (None, None) => {
-                missing.push(Missing {
-                    flag: "--branch",
-                    because: "origin names no default branch and no branch is checked out"
-                        .to_owned(),
-                });
-                None
-            }
-        },
-    };
-
-    let harness_or_model_given = given.harness.is_some() || given.model.is_some();
-    let agent = match (given.agent, agents.as_slice()) {
-        (Some(agent), _) => flagged(agent, "--agent"),
-        (None, [only]) if !harness_or_model_given => inferred(
-            only.name.clone(),
-            format!("the only Agent in {}", organization.value),
-        ),
-        (None, _) => inferred(
-            given
-                .harness
-                .clone()
-                .unwrap_or_else(|| DEFAULT_HARNESS.to_owned()),
-            "named for its Harness",
-        ),
-    };
-    let declared = agents.iter().find(|declared| declared.name == agent.value);
-    let differs = declared.is_some_and(|declared| {
-        given
-            .harness
-            .as_ref()
-            .is_some_and(|harness| harness != &declared.harness)
-            || given
-                .model
-                .as_ref()
-                .is_some_and(|model| Some(model) != declared.model.as_ref())
-    });
-    if differs && !agent.given {
-        missing.push(Missing {
-            flag: "--agent",
-            because: format!(
-                "the agent {} is declared differently, and a start changes no declaration",
-                agent.value
-            ),
-        });
-    }
-    let harness = match (given.harness, declared) {
-        (Some(harness), _) => flagged(harness, "--harness"),
-        (None, Some(declared)) => inferred(
-            declared.harness.clone(),
-            format!("the harness {} is declared on", declared.name),
-        ),
-        (None, None) => inferred(DEFAULT_HARNESS.to_owned(), "kestrel's default Harness"),
-    };
-    let model = match (given.model, declared) {
-        (Some(model), _) => flagged(Some(model), "--model"),
-        (None, Some(declared)) => inferred(
-            declared.model.clone(),
-            format!("the model {} is declared with", declared.name),
-        ),
-        (None, None) => inferred(None, "none, so the Harness chooses"),
-    };
-    let credentials = match (given.credentials, existing.credentials.as_slice()) {
-        (given, held) if !given.is_empty() => {
-            let replaced: Vec<&str> = given
-                .iter()
-                .filter(|variable| held.contains(variable))
-                .map(String::as_str)
-                .collect();
-            let mut credentials = flagged(given.clone(), "--credential");
-            if !replaced.is_empty() {
-                credentials.because = format!(
-                    "given as --credential, replacing what {} holds as {}",
-                    organization.value,
-                    replaced.join(", ")
-                );
-            }
-            credentials
+            (None, _) => Some("the working directory is in no git clone".to_owned()),
+            (Some(_), Some(_)) => None,
         }
-        (_, []) => inferred(
-            Vec::new(),
-            "none is held, so a Session reaches a model only through a harness logged in otherwise",
-        ),
-        (_, held) => inferred(
-            held.to_vec(),
-            format!("already held by {}", organization.value),
-        ),
-    };
-
-    match (repositories, project, branch) {
-        (Some(repositories), Some(project), Some(branch)) if missing.is_empty() => Ok(Plan {
-            organization,
-            repositories,
-            integrations,
-            project,
-            branch,
-            agent,
-            harness,
-            model,
-            credentials,
-        }),
-        _ => Err(missing),
-    }
-}
-
-impl Plan {
-    pub fn explained(&self) -> Vec<Explained<'_>> {
-        fn row<'a, T>(
-            what: &'static str,
-            inferred: &'a Inferred<T>,
-            value: String,
-            flag: &'static str,
-        ) -> Explained<'a> {
-            Explained {
-                what,
-                value,
-                because: &inferred.because,
-                given: inferred.given,
-                flag,
-            }
-        }
-        let listed = |values: &[String]| {
-            if values.is_empty() {
-                "none".to_owned()
-            } else {
-                values.join(", ")
-            }
-        };
-
-        vec![
-            row(
-                "organization",
-                &self.organization,
-                self.organization.value.clone(),
-                "--organization",
-            ),
-            row(
-                "project",
-                &self.project,
-                self.project.value.clone(),
-                "--project",
-            ),
-            row(
-                "repository",
-                &self.repositories,
-                listed(&self.repositories.value),
-                "--repository",
-            ),
-            row(
-                "branch",
-                &self.branch,
-                self.branch.value.clone(),
-                "--branch",
-            ),
-            row("agent", &self.agent, self.agent.value.clone(), "--agent"),
-            row(
-                "harness",
-                &self.harness,
-                self.harness.value.clone(),
-                "--harness",
-            ),
-            row(
-                "model",
-                &self.model,
-                self.model
-                    .value
-                    .clone()
-                    .unwrap_or_else(|| "none".to_owned()),
-                "--model",
-            ),
-            row(
-                "credentials",
-                &self.credentials,
-                listed(&self.credentials.value),
-                "--credential",
-            ),
-        ]
-    }
-
-    pub fn applying(&self, existing: &Existing) -> Vec<String> {
-        let organization = &self.organization.value;
-        let project = &self.project.value;
-        let agent = &self.agent.value;
-        let mut applying = Vec::new();
-
-        if !existing.organization_declared {
-            applying.push(format!(
-                "declare the Organization {organization}, the boundary everything below belongs to"
-            ));
-        }
-        if !existing
-            .projects
-            .iter()
-            .any(|declared| &declared.name == project)
-        {
-            applying.push(format!(
-                "declare the Project {project}, where work on {} happens on {}",
-                self.repositories.value.join(", "),
-                self.branch.value
-            ));
-        }
-        if !existing
-            .agents
-            .iter()
-            .any(|declared| &declared.name == agent)
-        {
-            let model = self
-                .model
-                .value
-                .as_deref()
-                .map_or("its default model".to_owned(), |model| {
-                    format!("the model {model}")
-                });
-            applying.push(format!(
-                "declare the Agent {agent}, an actor driven by the Harness {} with {model}",
-                self.harness.value
-            ));
-        }
-        if self.credentials.given {
-            applying.extend(self.credentials.value.iter().map(|variable| {
-                format!("hold {variable} as a Provider Credential of {organization}")
-            }));
-        }
-        applying.push(format!(
-            "open a Workspace in {project} carrying the Brief, and enqueue a Session of {agent} to \
-             work on it"
-        ));
-
-        applying
-    }
-
-    /// Only what was given is sent: what the Organization already holds stays where it is.
-    pub fn body(&self, brief: &str, secrets: &[(String, String)]) -> wire::StartPlan {
-        let mut agent =
-            wire::AgentDeclaration::new(self.harness.value.clone(), self.agent.value.clone());
-        agent.model = Some(self.model.value.clone());
-        let project = wire::ProjectDeclaration::builder(
-            self.branch.value.clone(),
-            self.project.value.clone(),
-            self.repositories.value.clone(),
-        )
-        .integrations(self.integrations.clone())
-        .build();
-        wire::StartPlan::builder(
-            agent,
-            brief.to_owned(),
-            self.organization.value.clone(),
-            project,
-        )
-        .credentials(
-            secrets
-                .iter()
-                .map(|(variable, secret)| wire::StartPlanCredentialsItem {
-                    variable: variable.clone(),
-                    secret: secret.clone(),
-                })
-                .collect(),
-        )
-        .build()
     }
 }
 
 /// Out of the Client's own environment, so a secret is never in a shell history or in what
-/// `ps` shows of this process.
+/// `ps` shows of this process. Each unset variable is named.
 pub fn secrets(
     variables: &[String],
     read: impl Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Vec<Missing>> {
-    let mut missing = Vec::new();
+) -> Result<Vec<(String, String)>, Vec<String>> {
+    let mut unset = Vec::new();
     let mut secrets = Vec::new();
     for variable in variables {
         match read(variable).filter(|secret| !secret.is_empty()) {
             Some(secret) => secrets.push((variable.clone(), secret)),
-            None => missing.push(Missing {
-                flag: "--credential",
-                because: format!("{variable} is not set in this environment"),
-            }),
+            None => unset.push(format!("{variable} is not set in this environment")),
         }
     }
 
-    if missing.is_empty() {
+    if unset.is_empty() {
         Ok(secrets)
     } else {
-        Err(missing)
+        Err(unset)
     }
 }
 
-fn repository_name(url: &str) -> &str {
-    let trimmed = url.trim_end_matches('/');
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+/// The flag a plan field is given by.
+pub fn flag(field: &str) -> String {
+    match field {
+        "repositories" | "clone.repository" => "--repository".to_owned(),
+        "credentials" => "--credential".to_owned(),
+        "sign_in_method" => "--sign-in".to_owned(),
+        field => {
+            let record = field.split('.').next().unwrap_or(field);
+            format!("--{}", record.replace('_', "-"))
+        }
+    }
+}
 
-    trimmed.rsplit('/').next().unwrap_or(trimmed)
+/// Inferred values fold onto one line; a given value, and the sign-in, keep a line each.
+pub fn review(preview: &wire::StartPreview) -> Vec<String> {
+    let mut inferred = Vec::new();
+    let mut given = Vec::new();
+    let mut fold = |what: &str, flag: &str, value: Option<&wire::StartValue>, shown: String| {
+        let Some(value) = value else { return };
+        if value.source == wire::StartSource::Given {
+            given.push(format!("  {flag:<14} {shown}"));
+        } else if value.value.is_none() && value.source == wire::StartSource::Default {
+            inferred.push(format!("{what} {shown}"));
+        } else {
+            inferred.push(format!("{what} {shown} ({})", because(value)));
+        }
+    };
+    fold(
+        "organization",
+        "--organization",
+        preview.organization.as_ref(),
+        shown(preview.organization.as_ref()),
+    );
+    fold(
+        "project",
+        "--project",
+        preview.project.as_ref(),
+        shown(preview.project.as_ref()),
+    );
+    if let Some(repositories) = &preview.repositories {
+        let listed = repositories
+            .value
+            .iter()
+            .map(|repository| {
+                if repository.given == repository.address {
+                    repository.address.clone()
+                } else {
+                    format!("{} (from {})", repository.address, repository.given)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let value = wire::StartValue {
+            value: None,
+            source: repositories.source.clone(),
+            record: repositories.record.clone(),
+        };
+        fold("repository", "--repository", Some(&value), listed);
+    }
+    fold(
+        "base branch",
+        "--branch",
+        preview.branch.as_ref(),
+        shown(preview.branch.as_ref()),
+    );
+    fold(
+        "agent",
+        "--agent",
+        Some(&preview.agent),
+        shown(Some(&preview.agent)),
+    );
+    fold(
+        "harness",
+        "--harness",
+        Some(&preview.harness),
+        shown(Some(&preview.harness)),
+    );
+    let model = preview
+        .model
+        .value
+        .clone()
+        .unwrap_or_else(|| "its harness's default".to_owned());
+    fold("model", "--model", Some(&preview.model), model);
+    if preview.profile.source == wire::StartSource::Given {
+        fold(
+            "profile",
+            "--profile",
+            Some(&preview.profile),
+            shown(Some(&preview.profile)),
+        );
+    }
+
+    let mut said = vec!["start".to_owned()];
+    if !inferred.is_empty() {
+        said.push(format!("  {:<14} {}", "inferred", inferred.join(" · ")));
+    }
+    said.extend(given);
+    said.push(format!("  {:<14} {}", "sign-in", sign_in(preview)));
+    said.push("already saved".to_owned());
+    said.push(format!("  {}", saved(&preview.saved)));
+    said.push("apply".to_owned());
+    said.extend(
+        applying(preview)
+            .into_iter()
+            .map(|step| format!("  {step}")),
+    );
+
+    said
+}
+
+fn shown(value: Option<&wire::StartValue>) -> String {
+    value
+        .and_then(|value| value.value.clone())
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+fn because(value: &wire::StartValue) -> String {
+    let record = value.record.as_deref().unwrap_or_default();
+    match value.source {
+        wire::StartSource::Given => "given".to_owned(),
+        wire::StartSource::CloneOrigin if value.record.is_some() => {
+            format!("{record} declares the clone's origin")
+        }
+        wire::StartSource::CloneOrigin => "the clone's origin".to_owned(),
+        wire::StartSource::CloneDefaultBranch => "origin's default".to_owned(),
+        wire::StartSource::CloneCheckedOut => "checked out, and origin names no default".to_owned(),
+        wire::StartSource::OnlyOrganization | wire::StartSource::OnlyAgent => {
+            "the only one".to_owned()
+        }
+        wire::StartSource::Project => format!("as {record} declares"),
+        wire::StartSource::Agent => format!("as {record} declares"),
+        wire::StartSource::NamedForRepository => "named for its repository".to_owned(),
+        wire::StartSource::NamedForHarness => "named for its harness".to_owned(),
+        wire::StartSource::SavedSignIn => "a saved sign-in serves it".to_owned(),
+        wire::StartSource::OperatorProfile => "the Operator's own".to_owned(),
+        wire::StartSource::Default => "kestrel's default".to_owned(),
+    }
+}
+
+fn sign_in(preview: &wire::StartPreview) -> String {
+    let organization = shown(preview.organization.as_ref());
+    match &preview.sign_in {
+        Some(sign_in) => {
+            let held = match sign_in.holding.resource {
+                wire::SignInHoldingResource::SubscriptionProfile => {
+                    format!("the subscription profile {}", sign_in.holding.reference)
+                }
+                wire::SignInHoldingResource::ProviderCredential => format!(
+                    "{organization}'s provider credential {}",
+                    sign_in.holding.reference
+                ),
+            };
+            format!("{} {}, held in {held}", sign_in.harness, sign_in.method)
+        }
+        None => match &preview.sign_in_method.value {
+            Some(method) => format!("{method}, not saved yet"),
+            None => {
+                format!("none selected; the harness is handed what {organization} holds for it")
+            }
+        },
+    }
+}
+
+fn saved(saved: &wire::ReadinessSaved) -> String {
+    let mut parts = Vec::new();
+    match &saved.operator {
+        Some(operator) => parts.push(format!("operator {}", operator.name)),
+        None => parts.push("no operator".to_owned()),
+    }
+    let sign_ins: Vec<String> = saved
+        .sign_ins
+        .iter()
+        .map(|sign_in| format!("{}/{}", sign_in.harness, sign_in.method))
+        .collect();
+    let listed = |values: &[String]| {
+        if values.is_empty() {
+            "none".to_owned()
+        } else {
+            values.join(", ")
+        }
+    };
+    parts.push(format!("sign-ins {}", listed(&sign_ins)));
+    parts.push(format!(
+        "github integrations {}",
+        listed(&saved.github_integrations)
+    ));
+    parts.push(format!("projects {}", listed(&saved.projects)));
+
+    parts.join(" · ")
+}
+
+fn applying(preview: &wire::StartPreview) -> Vec<String> {
+    let organization = shown(preview.organization.as_ref());
+    let project = shown(preview.project.as_ref());
+    let branch = shown(preview.branch.as_ref());
+    let agent = shown(Some(&preview.agent));
+    let repositories = preview.repositories.as_ref().map_or_else(
+        || "its repositories".to_owned(),
+        |repositories| {
+            repositories
+                .value
+                .iter()
+                .map(|repository| repository.address.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    );
+    let model = preview
+        .model
+        .value
+        .as_deref()
+        .map_or("its harness's default model".to_owned(), |model| {
+            format!("the model {model}")
+        });
+
+    preview
+        .declarations
+        .iter()
+        .filter_map(|step| {
+            let name = step.name.clone().unwrap_or_default();
+            use wire::StartDeclarationAction as Action;
+            use wire::StartDeclarationKind as Kind;
+            Some(match (&step.kind, &step.action) {
+                (_, Action::Reuse) => return None,
+                (Kind::Organization, _) => format!("declare the organization {name}"),
+                (Kind::Project, _) => {
+                    format!("declare the project {name} against {repositories}, based on {branch}")
+                }
+                (Kind::Agent, _) => format!(
+                    "declare the agent {name} on the harness {} with {model}",
+                    shown(Some(&preview.harness))
+                ),
+                (Kind::ProviderCredential, Action::Replace) => {
+                    format!("replace {organization}'s provider credential {name}")
+                }
+                (Kind::ProviderCredential, _) => {
+                    format!("hold {name} as a provider credential of {organization}")
+                }
+                (Kind::Workspace, _) => format!(
+                    "open a workspace in {project} on a branch of its own from {branch}, \
+                     carrying the brief, and enqueue a session of {agent}"
+                ),
+            })
+        })
+        .collect()
+}
+
+/// Every value the preview resolved, sent as given so a start that finds anything changed
+/// refuses rather than resolving something else.
+pub fn applied(
+    preview: &wire::StartPreview,
+    brief: String,
+    secrets: Vec<(String, String)>,
+) -> wire::StartPlan {
+    let value = |value: Option<&wire::StartValue>| value.and_then(|value| value.value.clone());
+    let repositories = preview.repositories.as_ref();
+    let integrations: Vec<wire::RepositoryIntegrationSelection> = repositories
+        .into_iter()
+        .flat_map(|repositories| &repositories.value)
+        .filter_map(|repository| {
+            repository
+                .integration
+                .clone()
+                .map(|integration| wire::RepositoryIntegrationSelection {
+                    repository: repository.address.clone(),
+                    integration,
+                })
+        })
+        .collect();
+
+    wire::StartPlan {
+        organization: value(preview.organization.as_ref()),
+        project: value(preview.project.as_ref()),
+        repositories: repositories.map(|repositories| {
+            repositories
+                .value
+                .iter()
+                .map(|repository| repository.address.clone())
+                .collect()
+        }),
+        integrations: (!integrations.is_empty()).then_some(integrations),
+        branch: value(preview.branch.as_ref()),
+        agent: value(Some(&preview.agent)),
+        harness: value(Some(&preview.harness)),
+        model: value(Some(&preview.model)),
+        profile: value(Some(&preview.profile)),
+        sign_in_method: value(Some(&preview.sign_in_method)),
+        brief: Some(brief),
+        credentials: (!secrets.is_empty()).then(|| {
+            secrets
+                .into_iter()
+                .map(|(variable, secret)| wire::StartCredential {
+                    variable,
+                    secret: Some(secret),
+                })
+                .collect()
+        }),
+        clone: None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    fn a_clone(origin: &str) -> LocalClone {
-        LocalClone {
-            root: Some(PathBuf::from("/work/widgets")),
-            origin: Some(origin.to_owned()),
-            default_branch: Some("main".to_owned()),
-            checked_out: Some("feature".to_owned()),
-        }
-    }
-
-    fn acme() -> Inferred<String> {
-        inferred("acme".to_owned(), "the only Organization")
-    }
-
-    fn planned(given: Given, clone: &LocalClone, existing: &Existing) -> Plan {
-        plan(acme(), given, clone, existing).unwrap_or_else(|missing| {
-            panic!("the plan is missing {missing:?}");
-        })
-    }
 
     #[test]
-    fn a_repository_is_named_the_same_from_every_spelling() {
-        for url in [
-            "https://github.com/acme/widgets.git",
-            "https://github.com/acme/widgets/",
-            "git@github.com:acme/widgets.git",
-            "ssh://git@host:22/group/acme/widgets",
-            "file:///srv/git/widgets",
-            "/srv/git/widgets.git",
-        ] {
-            assert_eq!(repository_name(url), "widgets", "{url}");
-        }
-    }
-
-    #[test]
-    fn with_several_organizations_and_none_named_the_flag_is_missing() {
-        let named = organization(None, &["acme".to_owned(), "globex".to_owned()]);
-
-        assert_eq!(named.map_err(|missing| missing.flag), Err("--organization"));
-    }
-
-    #[test]
-    fn a_fresh_clone_infers_every_value_with_a_reason() {
-        let plan = planned(
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing::default(),
-        );
-
-        let explained: Vec<(&str, String, &str)> = plan
-            .explained()
-            .into_iter()
-            .map(|row| (row.what, row.value, row.because))
-            .collect();
-        assert_eq!(
-            explained,
-            [
-                ("organization", "acme".to_owned(), "the only Organization"),
-                ("project", "widgets".to_owned(), "named for its repository"),
-                (
-                    "repository",
-                    "https://github.com/acme/widgets.git".to_owned(),
-                    "origin of the clone at /work/widgets",
-                ),
-                ("branch", "main".to_owned(), "origin's default branch"),
-                ("agent", "opencode".to_owned(), "named for its Harness"),
-                (
-                    "harness",
-                    "opencode".to_owned(),
-                    "kestrel's default Harness"
-                ),
-                ("model", "none".to_owned(), "none, so the Harness chooses"),
-                (
-                    "credentials",
-                    "none".to_owned(),
-                    "none is held, so a Session reaches a model only through a harness logged in \
-                     otherwise",
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn every_flag_overrides_what_would_be_inferred() {
-        let plan = planned(
-            Given {
-                repositories: vec!["https://github.com/globex/gadgets".to_owned()],
-                branch: Some("develop".to_owned()),
-                project: Some("gadgets-work".to_owned()),
-                agent: Some("builder".to_owned()),
-                harness: Some("claude".to_owned()),
-                model: Some("opus".to_owned()),
-                credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-            },
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing::default(),
-        );
-
-        for row in plan.explained().into_iter().skip(1) {
-            assert!(row.given, "{}", row.what);
-            assert_eq!(row.because, format!("given as {}", row.flag));
-        }
-        let body = plan.body("go", &[]);
-        assert_eq!(body.agent.model, Some(Some("opus".to_owned())));
-        assert_eq!(body.project.branch, "develop");
-    }
-
-    #[test]
-    fn a_project_already_declaring_the_repository_is_the_one_used() {
-        let plan = planned(
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                projects: vec![Project {
-                    name: "widgets-main".to_owned(),
-                    repositories: vec!["https://github.com/acme/widgets.git".to_owned()],
-                    integrations: vec![wire::RepositoryIntegrationSelection {
-                        repository: "https://github.com/acme/widgets.git".to_owned(),
-                        integration: "github".to_owned(),
-                    }],
-                    branch: "trunk".to_owned(),
-                }],
-                ..Existing::default()
-            },
-        );
-
-        assert_eq!(plan.project.value, "widgets-main");
-        assert_eq!(plan.branch.value, "trunk");
-        assert_eq!(
-            serde_json::to_value(plan.body("go", &[]).project.integrations).unwrap(),
-            json!([{
-                "repository": "https://github.com/acme/widgets.git",
-                "integration": "github",
-            }])
-        );
-    }
-
-    #[test]
-    fn repositories_given_against_a_declared_project_bring_none_of_its_integrations() {
-        let mut declared = widgets_declared_against("https://github.com/acme/other");
-        declared.integrations = vec![wire::RepositoryIntegrationSelection {
-            repository: "https://github.com/acme/other".to_owned(),
-            integration: "github".to_owned(),
-        }];
-        let plan = planned(
-            Given {
-                project: Some("widgets".to_owned()),
-                repositories: vec!["https://github.com/acme/widgets.git".to_owned()],
-                ..Given::default()
-            },
-            &LocalClone::default(),
-            &Existing {
-                projects: vec![declared],
-                ..Existing::default()
-            },
-        );
+    fn a_credential_is_read_from_the_environment_and_each_unset_one_is_named() {
+        let variables = ["ANTHROPIC_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()];
+        let read = |variable: &str| (variable == "ANTHROPIC_API_KEY").then(|| "sk".to_owned());
 
         assert_eq!(
-            serde_json::to_value(plan.body("go", &[]).project.integrations).unwrap(),
-            json!([])
-        );
-    }
-
-    #[test]
-    fn the_only_agent_is_the_one_used_with_what_it_is_declared_with() {
-        let plan = planned(
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                agents: vec![Agent {
-                    name: "builder".to_owned(),
-                    harness: "claude".to_owned(),
-                    model: Some("opus".to_owned()),
-                }],
-                ..Existing::default()
-            },
-        );
-
-        assert_eq!(plan.agent.value, "builder");
-        assert_eq!(plan.harness.value, "claude");
-        assert_eq!(plan.model.value.as_deref(), Some("opus"));
-    }
-
-    #[test]
-    fn with_no_origin_default_the_checked_out_branch_is_used() {
-        let plan = planned(
-            Given::default(),
-            &LocalClone {
-                default_branch: None,
-                ..a_clone("https://github.com/acme/widgets.git")
-            },
-            &Existing::default(),
-        );
-
-        assert_eq!(plan.branch.value, "feature");
-    }
-
-    #[test]
-    fn outside_a_clone_each_value_nothing_infers_names_its_flag() {
-        let missing = plan(
-            acme(),
-            Given::default(),
-            &LocalClone::default(),
-            &Existing::default(),
-        )
-        .err()
-        .expect("the plan is incomplete");
-
-        let flags: Vec<&str> = missing.iter().map(|missing| missing.flag).collect();
-        assert_eq!(flags, ["--repository", "--branch"]);
-    }
-
-    #[test]
-    fn a_credential_given_is_read_from_the_environment_and_never_from_the_command_line() {
-        let read = secrets(
-            &["ANTHROPIC_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()],
-            |variable| (variable == "ANTHROPIC_API_KEY").then(|| "sk-ant".to_owned()),
-        );
-
-        assert_eq!(
-            read.map_err(|missing| missing
-                .into_iter()
-                .map(|missing| missing.because)
-                .collect::<Vec<_>>()),
+            secrets(&variables, read),
             Err(vec![
                 "OPENAI_API_KEY is not set in this environment".to_owned()
             ])
         );
+        assert_eq!(
+            secrets(&variables[..1], read),
+            Ok(vec![("ANTHROPIC_API_KEY".to_owned(), "sk".to_owned())])
+        );
     }
 
     #[test]
-    fn credentials_the_organization_already_holds_are_explained_when_none_is_given() {
-        let plan = planned(
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-                ..Existing::default()
-            },
-        );
-
-        assert_eq!(
-            plan.credentials,
-            inferred(vec!["ANTHROPIC_API_KEY".to_owned()], "already held by acme")
-        );
-    }
-
-    fn widgets_declared_against(repository: &str) -> Project {
-        Project {
-            name: "widgets".to_owned(),
-            repositories: vec![repository.to_owned()],
-            integrations: Vec::new(),
-            branch: "main".to_owned(),
+    fn a_plan_field_is_named_by_the_flag_that_gives_it() {
+        for (field, named) in [
+            ("repositories", "--repository"),
+            ("project.branch", "--project"),
+            ("agent.harness", "--agent"),
+            ("sign_in_method", "--sign-in"),
+            ("brief", "--brief"),
+            ("organization", "--organization"),
+        ] {
+            assert_eq!(flag(field), named);
         }
-    }
-
-    #[test]
-    fn a_project_named_by_flag_brings_its_own_repositories() {
-        let plan = planned(
-            Given {
-                project: Some("widgets".to_owned()),
-                ..Given::default()
-            },
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                projects: vec![widgets_declared_against("https://github.com/acme/other")],
-                ..Existing::default()
-            },
-        );
-
-        assert_eq!(plan.repositories.value, ["https://github.com/acme/other"]);
-    }
-
-    #[test]
-    fn an_inferred_project_name_declared_otherwise_names_the_flag_to_pass() {
-        let missing = plan(
-            acme(),
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                projects: vec![widgets_declared_against("https://github.com/acme/other")],
-                ..Existing::default()
-            },
-        )
-        .err()
-        .expect("the plan is refused");
-
-        assert_eq!(missing[0].flag, "--project");
-    }
-
-    #[test]
-    fn an_inferred_agent_declared_otherwise_names_the_flag_to_pass() {
-        let missing = plan(
-            acme(),
-            Given {
-                model: Some("sonnet".to_owned()),
-                ..Given::default()
-            },
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                agents: vec![Agent {
-                    name: "opencode".to_owned(),
-                    harness: "opencode".to_owned(),
-                    model: Some("opus".to_owned()),
-                }],
-                ..Existing::default()
-            },
-        )
-        .err()
-        .expect("the plan is refused");
-
-        assert_eq!(missing[0].flag, "--agent");
-    }
-
-    #[test]
-    fn applying_a_plan_to_nothing_declares_everything_before_the_session() {
-        let plan = planned(
-            Given {
-                credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-                ..Given::default()
-            },
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing::default(),
-        );
-
-        assert_eq!(
-            plan.applying(&Existing::default()),
-            [
-                "declare the Organization acme, the boundary everything below belongs to",
-                "declare the Project widgets, where work on \
-                 https://github.com/acme/widgets.git happens on main",
-                "declare the Agent opencode, an actor driven by the Harness opencode \
-                 with its default model",
-                "hold ANTHROPIC_API_KEY as a Provider Credential of acme",
-                "open a Workspace in widgets carrying the Brief, and enqueue a Session of opencode \
-                 to work on it",
-            ]
-        );
-    }
-
-    #[test]
-    fn applying_a_plan_redeclares_nothing_that_exists() {
-        let existing = Existing {
-            organization_declared: true,
-            projects: vec![widgets_declared_against(
-                "https://github.com/acme/widgets.git",
-            )],
-            declaring: None,
-            agents: vec![Agent {
-                name: "builder".to_owned(),
-                harness: "claude".to_owned(),
-                model: Some("opus".to_owned()),
-            }],
-            credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-        };
-        let plan = planned(
-            Given::default(),
-            &a_clone("https://github.com/acme/widgets.git"),
-            &existing,
-        );
-
-        assert_eq!(
-            plan.applying(&existing),
-            [
-                "open a Workspace in widgets carrying the Brief, and enqueue a Session of builder to \
-              work on it"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_credential_given_says_which_held_one_it_replaces() {
-        let plan = planned(
-            Given {
-                credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-                ..Given::default()
-            },
-            &a_clone("https://github.com/acme/widgets.git"),
-            &Existing {
-                credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
-                ..Existing::default()
-            },
-        );
-
-        assert!(plan.credentials.given);
-        assert_eq!(
-            plan.credentials.because,
-            "given as --credential, replacing what acme holds as ANTHROPIC_API_KEY"
-        );
     }
 }

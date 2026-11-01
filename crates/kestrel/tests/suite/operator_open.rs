@@ -311,6 +311,7 @@ async fn a_continuation_that_is_open_or_names_a_branch_is_refused_and_leaves_not
 #[tokio::test]
 async fn a_start_and_an_operator_open_reach_the_same_transcript() {
     let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
 
     let (status, started) = declared(
         &kestrel,

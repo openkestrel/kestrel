@@ -1,6 +1,6 @@
 use crate::support;
 
-use kestrel::domain::{Exit, SessionId, WorkspaceId};
+use kestrel::domain::{Exit, Organization, SessionId, WorkspaceId};
 use kestrel::log::{BriefSource, Entry};
 use serde_json::Value;
 use support::client::{Finished, Invocation, Shown, ran_by, ran_on_a_terminal_by};
@@ -9,6 +9,7 @@ use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, repository, supervisor};
 
 const BRIEF: &str = "Make the README say what kestrel is";
 const QUESTION: &str = "apply this plan?";
+const SIGN_IN: &str = "ANTHROPIC_API_KEY";
 
 fn in_a_fresh_clone() -> Invocation {
     Invocation::default()
@@ -16,31 +17,39 @@ fn in_a_fresh_clone() -> Invocation {
         .within(repository::NAME)
 }
 
-fn refused_naming(finished: &Finished, flags: &[&str]) {
+fn refused_naming(finished: &Finished, code: i32, named: &[&str]) {
     assert_eq!(
         finished.status.code(),
-        Some(2),
-        "the start was not refused as a usage error:\n{}",
+        Some(code),
+        "the start was not refused as expected:\n{}",
         finished.err
     );
     assert!(finished.out.is_empty(), "{:?}", finished.out);
-    for flag in flags {
+    for name in named {
         assert!(
-            finished.err.contains(flag),
-            "the refusal does not name {flag}:\n{}",
+            finished.err.contains(name),
+            "the refusal does not name {name}:\n{}",
             finished.err
         );
     }
 }
 
-/// Each explained value without its reason, which names the directory the clone was made in.
-fn resolved(said: &str) -> Vec<String> {
+/// The review, from its first line to the last step it would apply.
+fn reviewed(said: &str) -> Vec<String> {
     said.lines()
-        .skip_while(|line| *line != "starting work with")
-        .skip(1)
-        .take(8)
-        .map(|line| line.split("  (").next().unwrap_or(line).to_owned())
+        .skip_while(|line| *line != "start")
+        .take_while(|line| {
+            line.starts_with("  ") || ["start", "already saved", "apply"].contains(line)
+        })
+        .map(str::to_owned)
         .collect()
+}
+
+fn inferred(said: &str) -> String {
+    reviewed(said)
+        .into_iter()
+        .find(|line| line.trim_start().starts_with("inferred"))
+        .unwrap_or_else(|| panic!("nothing was inferred:\n{said}"))
 }
 
 fn reached(shown: &Shown) -> Value {
@@ -53,9 +62,20 @@ fn reached(shown: &Shown) -> Value {
     serde_json::from_str(record).expect("a record")
 }
 
-/// An install as naming its Operator leaves it: one Organization, `default`, holding nothing.
+/// An Operator named for the Organization, which holds a key opencode signs in with.
+async fn ready_in(kestrel: &Kestrel, organization: &str) -> Organization {
+    kestrel.name_operator(organization).await;
+    let organization = kestrel.declare_organization(organization).await;
+    kestrel
+        .hold_provider_credential(&organization, SIGN_IN, "sk-ant-api03-key")
+        .await;
+
+    organization
+}
+
+/// An install as naming its Operator leaves it, one Organization, `default`, with a sign-in.
 async fn named(kestrel: Kestrel) -> Kestrel {
-    kestrel.name_operator("default").await;
+    ready_in(&kestrel, "default").await;
 
     kestrel
 }
@@ -88,6 +108,12 @@ async fn declared(kestrel: &Kestrel) -> Vec<String> {
     declared
 }
 
+const NOTHING_STARTED: [&str; 3] = [
+    "organization default",
+    "credential ANTHROPIC_API_KEY",
+    "workspaces 0",
+];
+
 #[tokio::test]
 async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session_carrying_its_brief()
  {
@@ -108,6 +134,7 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
             BRIEF,
             "--credential",
             PROVIDER_KEY,
+            "--yes",
             "--json",
         ],
         in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY),
@@ -165,52 +192,49 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
 }
 
 #[tokio::test]
-async fn every_inferred_value_is_explained_before_anything_is_applied() {
+async fn without_a_terminal_or_yes_the_plan_is_reviewed_with_inferred_values_folded_and_nothing_applied()
+ {
     let kestrel = named(Kestrel::boot().await).await;
 
-    let started = ran_by(&kestrel, &["start", "--brief", BRIEF], in_a_fresh_clone()).await;
+    let refused = ran_by(&kestrel, &["start", "--brief", BRIEF], in_a_fresh_clone()).await;
 
-    assert!(started.status.success(), "{}", started.err);
-    let explained: Vec<&str> = started
-        .err
-        .lines()
-        .skip_while(|line| *line != "starting work with")
-        .skip(1)
-        .take(8)
-        .collect();
-    for (line, (what, flag)) in explained.iter().zip([
-        ("organization", "--organization"),
-        ("project", "--project"),
-        ("repository", "--repository"),
-        ("branch", "--branch"),
-        ("agent", "--agent"),
-        ("harness", "--harness"),
-        ("model", "--model"),
-        ("credentials", "--credential"),
-    ]) {
+    refused_naming(&refused, 2, &["--yes"]);
+    let folded = inferred(&refused.err);
+    for value in [
+        "organization default (the only one)".to_owned(),
+        format!("project {} (named for its repository)", repository::NAME),
+        format!("repository {} (the clone's origin)", repository::url()),
+        "base branch main (origin's default)".to_owned(),
+        "agent opencode (named for its harness)".to_owned(),
+        "harness opencode (kestrel's default)".to_owned(),
+    ] {
         assert!(
-            line.trim_start().starts_with(what) && line.ends_with(&format!("{flag} overrides it)")),
-            "{what} is not explained with the flag that overrides it:\n{}",
-            started.err
+            folded.contains(&value),
+            "{value} is not folded in:\n{folded}"
         );
     }
-    assert!(
-        explained[2].contains(repository::url()) && explained[2].contains("origin of the clone"),
-        "{}",
-        started.err
-    );
-    assert!(
-        explained[3].contains("main  (origin's default branch"),
-        "{}",
-        started.err
-    );
+    let review = reviewed(&refused.err);
+    for said in [
+        "already saved",
+        "  operator default · sign-ins ",
+        &format!("  declare the project {}", repository::NAME),
+        "  declare the agent opencode on the harness opencode",
+        "  open a workspace in",
+    ] {
+        assert!(
+            review.iter().any(|line| line.starts_with(said)),
+            "the review does not say {said}:\n{}",
+            refused.err
+        );
+    }
+    assert_eq!(declared(&kestrel).await, NOTHING_STARTED);
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn flags_say_every_value_nothing_needs_inferring() {
-    let kestrel = Kestrel::boot().await;
+async fn flags_say_every_value_and_each_keeps_its_own_line() {
+    let kestrel = named(Kestrel::boot().await).await;
 
     let started = ran_by(
         &kestrel,
@@ -230,19 +254,43 @@ async fn flags_say_every_value_nothing_needs_inferring() {
             "builder",
             "--harness",
             "opencode",
+            "--credential",
+            SIGN_IN,
+            "--yes",
             "--json",
         ],
-        Invocation::default(),
+        Invocation::default().env(SIGN_IN, "sk-ant-api03-key"),
     )
     .await;
 
+    for flag in [
+        "--organization",
+        "--project",
+        "--repository",
+        "--branch",
+        "--agent",
+        "--harness",
+    ] {
+        assert!(
+            reviewed(&started.err)
+                .iter()
+                .any(|line| line.trim_start().starts_with(flag)),
+            "{flag} has no line of its own:\n{}",
+            started.err
+        );
+    }
     let started = started.json();
     assert_eq!(started["organization"]["name"], "acme");
     assert_eq!(started["project"]["name"], "widgets");
     assert_eq!(started["agent"]["name"], "builder");
-    let acme = &kestrel.organizations().await[0];
+    let acme = kestrel
+        .organizations()
+        .await
+        .into_iter()
+        .find(|organization| organization.name == "acme")
+        .expect("acme");
     assert_eq!(
-        kestrel.projects(acme).await[0].branch,
+        kestrel.projects(&acme).await[0].branch,
         repository::EXISTING_BRANCH
     );
 
@@ -250,24 +298,46 @@ async fn flags_say_every_value_nothing_needs_inferring() {
 }
 
 #[tokio::test]
-async fn with_no_terminal_and_no_clone_it_fails_naming_the_flags_and_declares_nothing() {
+async fn with_no_terminal_and_no_clone_it_fails_naming_every_flag_and_declares_nothing() {
     let kestrel = named(Kestrel::boot().await).await;
 
     let refused = ran_by(
         &kestrel,
-        &["start", "--brief", BRIEF, "--credential", PROVIDER_KEY],
+        &["start", "--credential", PROVIDER_KEY, "--yes"],
         Invocation::default().given(""),
     )
     .await;
 
     refused_naming(
         &refused,
-        &["--repository", "--branch", "--credential", PROVIDER_KEY],
+        2,
+        &[
+            "--repository",
+            "no git clone",
+            "--branch",
+            "--brief",
+            "--credential",
+            PROVIDER_KEY,
+        ],
     );
-    assert_eq!(
-        declared(&kestrel).await,
-        ["organization default", "workspaces 0"]
-    );
+    assert_eq!(declared(&kestrel).await, NOTHING_STARTED);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn without_an_operator_it_fails_on_the_setup_gap() {
+    let kestrel = Kestrel::boot().await;
+
+    let refused = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF, "--yes"],
+        in_a_fresh_clone(),
+    )
+    .await;
+
+    refused_naming(&refused, 78, &["operator"]);
+    assert!(kestrel.organizations().await.is_empty());
 
     kestrel.teardown().await;
 }
@@ -275,12 +345,18 @@ async fn with_no_terminal_and_no_clone_it_fails_naming_the_flags_and_declares_no
 #[tokio::test]
 async fn with_several_organizations_and_none_named_it_fails_naming_the_flag() {
     let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
     kestrel.declare_organization("acme").await;
     kestrel.declare_organization("globex").await;
 
-    let refused = ran_by(&kestrel, &["start", "--brief", BRIEF], in_a_fresh_clone()).await;
+    let refused = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF, "--yes"],
+        in_a_fresh_clone(),
+    )
+    .await;
 
-    refused_naming(&refused, &["--organization", "acme", "globex"]);
+    refused_naming(&refused, 2, &["--organization", "acme", "globex"]);
     for organization in kestrel.organizations().await {
         assert!(kestrel.projects(&organization).await.is_empty());
     }
@@ -289,9 +365,9 @@ async fn with_several_organizations_and_none_named_it_fails_naming_the_flag() {
 }
 
 #[tokio::test]
-async fn a_plan_the_control_plane_refuses_leaves_no_partial_setup() {
+async fn a_declaration_the_plan_would_change_is_refused_before_anything_is_sent() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
     kestrel
         .declare_project(
             &acme,
@@ -313,27 +389,28 @@ async fn a_plan_the_control_plane_refuses_leaves_no_partial_setup() {
             repository::other_url(),
             "--credential",
             PROVIDER_KEY,
+            "--yes",
         ],
         in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY),
     )
     .await;
 
-    assert_eq!(refused.status.code(), Some(4), "{}", refused.err);
+    refused_naming(&refused, 4, &["repositories"]);
     assert_eq!(
         kestrel.projects(&acme).await[0].repositories,
         [repository::url()]
     );
     assert!(kestrel.agents(&acme).await.is_empty());
-    assert!(kestrel.provider_credentials_held(&acme).await.is_empty());
+    assert_eq!(kestrel.provider_credentials_held(&acme).await.len(), 1);
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn github_shorthand_finds_the_project_declared_against_its_address() {
+async fn github_shorthand_is_shown_at_its_address_and_finds_the_project_declared_there() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
     kestrel
         .declare_project(
             &acme,
@@ -353,26 +430,21 @@ async fn github_shorthand_finds_the_project_declared_against_its_address() {
             "acme/widgets",
             "--branch",
             repository::BRANCH,
-            "--credential",
-            PROVIDER_KEY,
+            "--yes",
         ],
-        in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY),
+        in_a_fresh_clone(),
     )
     .await;
 
     assert!(started.status.success(), "{}", started.err);
-    let explained = resolved(&started.err);
+    let review = reviewed(&started.err).join("\n");
     assert!(
-        explained
-            .iter()
-            .any(|row| row.ends_with("https://github.com/acme/widgets.git")),
-        "{explained:?}"
+        review.contains("https://github.com/acme/widgets.git (from acme/widgets)"),
+        "{review}"
     );
     assert!(
-        explained
-            .iter()
-            .any(|row| row.ends_with("widgets") && row.contains("project")),
-        "{explained:?}"
+        inferred(&started.err).contains("project widgets (as widgets declares)"),
+        "{review}"
     );
     assert_eq!(kestrel.projects(&acme).await.len(), 1);
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
@@ -383,7 +455,7 @@ async fn github_shorthand_finds_the_project_declared_against_its_address() {
 #[tokio::test]
 async fn a_clone_by_another_transport_finds_the_project_and_starts_against_its_declared_address() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
     kestrel
         .declare_project(
             &acme,
@@ -395,27 +467,24 @@ async fn a_clone_by_another_transport_finds_the_project_and_starts_against_its_d
 
     let started = ran_by(
         &kestrel,
-        &["start", "--brief", BRIEF, "--credential", PROVIDER_KEY],
+        &["start", "--brief", BRIEF, "--yes"],
         Invocation::default()
             .cloned_with_origin(
                 repository::url(),
                 repository::NAME,
                 "git@github.com:Acme/widgets",
             )
-            .within(repository::NAME)
-            .env(PROVIDER_KEY, A_PROVIDER_KEY),
+            .within(repository::NAME),
     )
     .await;
 
     assert!(started.status.success(), "{}", started.err);
-    let explained = resolved(&started.err);
     assert!(
-        explained
-            .iter()
-            .any(|row| row.contains("project") && row.ends_with("storefront")),
-        "{explained:?}"
+        inferred(&started.err)
+            .contains("project storefront (storefront declares the clone's origin)"),
+        "{}",
+        started.err
     );
-    assert_eq!(kestrel.projects(&acme).await.len(), 1);
     let workspaces = kestrel.workspaces("acme").await;
     assert_eq!(workspaces.len(), 1);
     assert_eq!(
@@ -429,7 +498,7 @@ async fn a_clone_by_another_transport_finds_the_project_and_starts_against_its_d
 #[tokio::test]
 async fn a_clone_two_projects_begin_with_infers_neither_and_names_both() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
     for name in ["storefront", "storefront-next"] {
         kestrel
             .declare_project(
@@ -443,7 +512,7 @@ async fn a_clone_two_projects_begin_with_infers_neither_and_names_both() {
 
     let refused = ran_by(
         &kestrel,
-        &["start", "--brief", BRIEF],
+        &["start", "--brief", BRIEF, "--yes"],
         Invocation::default()
             .cloned_with_origin(
                 repository::url(),
@@ -454,26 +523,32 @@ async fn a_clone_two_projects_begin_with_infers_neither_and_names_both() {
     )
     .await;
 
-    refused_naming(&refused, &["--project", "storefront", "storefront-next"]);
+    refused_naming(&refused, 2, &["--project", "storefront", "storefront-next"]);
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_repository_no_declaration_could_hold_is_refused_before_anything_is_sent() {
+async fn a_repository_no_declaration_could_hold_is_refused_before_anything_is_declared() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
 
     let refused = ran_by(
         &kestrel,
-        &["start", "--brief", BRIEF, "--repository", "widgets"],
+        &[
+            "start",
+            "--brief",
+            BRIEF,
+            "--repository",
+            "widgets",
+            "--yes",
+        ],
         in_a_fresh_clone(),
     )
     .await;
 
-    assert!(!refused.status.success());
-    assert!(refused.err.contains("--repository"), "{}", refused.err);
+    refused_naming(&refused, 4, &["repositories"]);
     assert!(kestrel.projects(&acme).await.is_empty());
     assert!(kestrel.agents(&acme).await.is_empty());
 
@@ -481,9 +556,9 @@ async fn a_repository_no_declaration_could_hold_is_refused_before_anything_is_se
 }
 
 #[tokio::test]
-async fn a_declaration_the_plan_would_change_is_named_before_anything_is_sent() {
+async fn an_inferred_project_name_declared_otherwise_names_the_flag_to_pass() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
+    let acme = ready_in(&kestrel, "acme").await;
     kestrel
         .declare_project(
             &acme,
@@ -493,32 +568,34 @@ async fn a_declaration_the_plan_would_change_is_named_before_anything_is_sent() 
         )
         .await;
 
-    let refused = ran_by(&kestrel, &["start", "--brief", BRIEF], in_a_fresh_clone()).await;
+    let refused = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF, "--yes"],
+        in_a_fresh_clone(),
+    )
+    .await;
 
-    refused_naming(&refused, &["--project"]);
+    refused_naming(&refused, 2, &["--project"]);
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start_applies() {
-    let args = [
-        "start",
-        "--brief",
-        BRIEF,
-        "--credential",
-        PROVIDER_KEY,
-        "--json",
-    ];
-    let invocation = in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY);
+async fn on_a_terminal_confirming_once_applies_the_plan_yes_applies_without_one() {
+    let args = ["start", "--brief", BRIEF, "--json"];
     let (interactive, noninteractive) = (
         named(Kestrel::boot().await).await,
         named(Kestrel::boot().await).await,
     );
 
-    let confirmed = ran_on_a_terminal_by(&interactive, &args, invocation.clone(), "y\n").await;
-    let applied = ran_by(&noninteractive, &args, invocation).await;
+    let confirmed = ran_on_a_terminal_by(&interactive, &args, in_a_fresh_clone(), "y\n").await;
+    let applied = ran_by(
+        &noninteractive,
+        &[&args[..], &["--yes"]].concat(),
+        in_a_fresh_clone(),
+    )
+    .await;
 
     assert!(confirmed.status.success(), "{}", confirmed.said);
     assert_eq!(
@@ -527,16 +604,13 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
         "the start asked something other than one confirmation:\n{}",
         confirmed.said
     );
-    assert!(
-        !applied.err.contains(QUESTION),
-        "a start with no terminal asked:\n{}",
-        applied.err
-    );
-    assert_eq!(resolved(&confirmed.said), resolved(&applied.err));
+    assert!(!applied.err.contains(QUESTION), "{}", applied.err);
+    assert_eq!(reviewed(&confirmed.said), reviewed(&applied.err));
     let (confirmed, applied) = (reached(&confirmed), applied.json());
     for field in ["organization", "project", "agent"] {
         assert_eq!(confirmed[field]["name"], applied[field]["name"], "{field}");
     }
+    assert_eq!(confirmed["completed_initial_setup"], true);
     assert_eq!(
         declared(&interactive).await,
         declared(&noninteractive).await
@@ -547,7 +621,7 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
 }
 
 #[tokio::test]
-async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes_nothing() {
+async fn on_a_terminal_declining_the_reviewed_plan_changes_nothing() {
     let kestrel = named(Kestrel::boot().await).await;
 
     let shown = ran_on_a_terminal_by(
@@ -559,73 +633,18 @@ async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes
     .await;
 
     assert!(shown.status.success(), "{}", shown.said);
-    assert_eq!(
-        declared(&kestrel).await,
-        ["organization default", "workspaces 0"]
-    );
-    let before: Vec<&str> = shown
-        .lines()
-        .into_iter()
-        .take_while(|line| !line.contains(QUESTION))
-        .collect();
-    assert_eq!(resolved(&before.join("\n")).len(), 8, "{}", shown.said);
-    for flag in [
-        "--organization",
-        "--project",
-        "--repository",
-        "--branch",
-        "--agent",
-        "--harness",
-        "--model",
-        "--credential",
-    ] {
-        assert!(
-            before
-                .iter()
-                .any(|line| line.ends_with(&format!("{flag} overrides it)"))),
-            "no value names {flag}:\n{}",
-            shown.said
-        );
-    }
-    for taught in [
-        &format!("declare the Project {}", repository::NAME),
-        "declare the Agent opencode",
-        "open a Workspace",
-    ] {
-        assert!(
-            before.iter().any(|line| line.contains(taught)),
-            "the plan does not say it will {taught}:\n{}",
-            shown.said
-        );
-    }
+    assert!(shown.said.contains("nothing was applied"), "{}", shown.said);
+    assert!(!reviewed(&shown.said).is_empty(), "{}", shown.said);
+    assert_eq!(declared(&kestrel).await, NOTHING_STARTED);
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn on_a_terminal_yes_applies_the_plan_without_asking() {
+async fn with_output_on_a_terminal_and_input_piped_nothing_is_asked_or_applied() {
     let kestrel = named(Kestrel::boot().await).await;
 
-    let applied = ran_on_a_terminal_by(
-        &kestrel,
-        &["start", "--brief", BRIEF, "--yes"],
-        in_a_fresh_clone(),
-        "",
-    )
-    .await;
-
-    assert!(applied.status.success(), "{}", applied.said);
-    assert!(!applied.said.contains(QUESTION), "{}", applied.said);
-    assert_eq!(kestrel.workspaces("default").await.len(), 1);
-
-    kestrel.teardown().await;
-}
-
-#[tokio::test]
-async fn with_output_on_a_terminal_and_input_piped_nothing_is_asked() {
-    let kestrel = named(Kestrel::boot().await).await;
-
-    let applied = ran_on_a_terminal_by(
+    let refused = ran_on_a_terminal_by(
         &kestrel,
         &["start", "--brief", BRIEF],
         in_a_fresh_clone().given(""),
@@ -633,9 +652,10 @@ async fn with_output_on_a_terminal_and_input_piped_nothing_is_asked() {
     )
     .await;
 
-    assert!(applied.status.success(), "{}", applied.said);
-    assert!(!applied.said.contains(QUESTION), "{}", applied.said);
-    assert_eq!(kestrel.workspaces("default").await.len(), 1);
+    assert_eq!(refused.status.code(), Some(2), "{}", refused.said);
+    assert!(!refused.said.contains(QUESTION), "{}", refused.said);
+    assert!(refused.said.contains("--yes"), "{}", refused.said);
+    assert_eq!(declared(&kestrel).await, NOTHING_STARTED);
 
     kestrel.teardown().await;
 }

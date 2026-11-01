@@ -113,9 +113,19 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
     let capability = images.read().await;
 
     let mut tx = store.read().await?;
+    let organization = scope(&mut tx, context.organization.as_deref()).await?;
+    assessed(&mut tx, &capability, organization, &context).await
+}
+
+/// Readiness of a path within an Organization already chosen, or none yet declared.
+pub(crate) async fn assessed(
+    tx: &mut Tx<'_>,
+    capability: &Capability,
+    organization: Option<Organization>,
+    context: &Context,
+) -> Result<Readiness> {
     let operator = tx.operators().current().await?;
     let initial_setup_complete = tx.operators().initial_setup_complete().await?;
-    let organization = scope(&mut tx, context.organization.as_deref()).await?;
 
     let mut gaps = Vec::new();
     let mut warnings = Vec::new();
@@ -131,7 +141,7 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
     let mut lending = Vec::new();
     let mut paused = Vec::new();
     if let Some(organization) = &organization {
-        let mut holding = sign_in::operator_profiles(&mut tx, organization).await?;
+        let mut holding = sign_in::operator_profiles(tx, organization).await?;
         if let Some(named) = &context.profile {
             match refusal(tx.profiles().named(organization, named).await)? {
                 Ok(profile) => {
@@ -146,7 +156,7 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
                 }
             }
         }
-        sign_ins = sign_in::saved_in(&mut tx, organization, holding).await?;
+        sign_ins = sign_in::saved_in(tx, organization, holding).await?;
         projects = tx.projects().all(organization).await?;
         for integration in tx.integrations().all(organization).await? {
             match refusal(
@@ -162,10 +172,10 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
     }
 
     let paths = Paths {
-        capability: &capability,
+        capability,
         sign_ins: &sign_ins,
         naming: &naming,
-        context: &context,
+        context,
         organization: organization.as_ref(),
     }
     .evaluated();
@@ -194,7 +204,7 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
         _ => (projects.len() == 1).then(|| projects[0].clone()),
     };
     if let (Some(project), Some(organization)) = (&project, &organization) {
-        warnings.extend(not_lending(&mut tx, organization, project).await?);
+        warnings.extend(not_lending(tx, organization, project).await?);
     }
 
     Ok(Readiness {
@@ -222,7 +232,7 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
         projects: projects.into_iter().map(|project| project.name).collect(),
         gaps,
         warnings,
-        uninspectable: uninspectable(&capability, context.harness.as_deref()),
+        uninspectable: uninspectable(capability, context.harness.as_deref()),
         organization,
         operator,
         initial_setup_complete,
@@ -233,7 +243,7 @@ fn given(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
-fn offered(context: &Context) -> Result<()> {
+pub(crate) fn offered(context: &Context) -> Result<()> {
     let Some(method) = &context.sign_in_method else {
         return Ok(());
     };

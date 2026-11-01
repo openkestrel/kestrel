@@ -91,12 +91,15 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   refused or lost write is never sent again: once an invocation has sent a write, a retry is
   described, not offered to run. A Session's own `diagnostic` is part of
   `session show`'s successful output.
-- `kestrel start` (`start.rs`) infers a Project and Agent from the local clone and explains every
-  inferred value on stderr before changing anything. Its Organization is the scope's: a
-  repository's owner never names one, and only an explicit `--organization` declares one. It
-  never compares addresses itself: `listProjects?repository=` names the Projects whose first
-  repository the clone's origin names (`repository::Identity`), and the one it finds supplies the
-  repositories and Integrations the start uses.
+- `kestrel start` (`start.rs`) sends its flags and what only it can see, the clone's origin,
+  default and checked-out branch, to `starts/preview`, and plans nothing itself. It reviews the
+  answer on stderr: inferred values folded onto one line, each given value and the sign-in on a
+  line of its own, the setup already saved, and what applying would declare, hold and open. A gap
+  fails as its kind says (78 for setup, 4 for a conflict); missing inputs fail together with 2,
+  naming every flag. It applies only with `--yes`, or a confirmation when standard input and
+  standard error are both a terminal, sending every resolved value as given so a start that
+  finds anything changed refuses rather than resolving something else; a refused start is never
+  sent again. Only a named Organization is sent: the only one is the control plane's to find.
 
 ## The browser Client
 

@@ -32,6 +32,10 @@ pub fn message(diagnostic: &wire::Diagnostic) -> &str {
     each_kind!(diagnostic, d => &d.message)
 }
 
+pub fn field(diagnostic: &wire::Diagnostic) -> Option<&str> {
+    each_kind!(diagnostic, d => d.field.as_deref())
+}
+
 pub fn after_save(error: anyhow::Error, saved: &str) -> anyhow::Error {
     let Some(mut diagnostic) = error
         .downcast_ref::<Failed>()
