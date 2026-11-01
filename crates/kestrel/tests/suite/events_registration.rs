@@ -1,16 +1,13 @@
-use std::time::Duration;
-
+use jiff::SignedDuration;
 use kestrel::domain::Direction;
 
-use crate::support::Kestrel;
-use crate::support::events::{
-    BOTH, PATIENCE, REPOSITORY, eagerly, labelled_ready, polled, polls, recorded, watching,
-};
+use crate::support::events::{BOTH, POLL_INTERVAL, REPOSITORY, labelled_ready, polls, watching};
 use crate::support::github_stub::GithubStub;
+use crate::support::Kestrel;
 
 #[tokio::test]
 async fn an_integration_declares_which_directions_it_carries() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let stub = GithubStub::start();
     watching(&kestrel, &stub, &[Direction::Inbound]).await;
 
@@ -29,7 +26,7 @@ async fn an_integration_declares_which_directions_it_carries() {
 async fn an_integration_that_carries_only_outbound_is_never_polled() {
     let outbound_only = GithubStub::start();
     let polling = GithubStub::start();
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
 
     kestrel.declare_organization("acme").await;
     kestrel
@@ -39,7 +36,7 @@ async fn an_integration_that_carries_only_outbound_is_never_polled() {
             REPOSITORY,
             &outbound_only.base_url(),
             &[Direction::Outbound],
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
     kestrel
@@ -49,11 +46,13 @@ async fn an_integration_that_carries_only_outbound_is_never_polled() {
             REPOSITORY,
             &polling.base_url(),
             &[Direction::Inbound],
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
 
-    polled(&polling, 3).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
+    assert_eq!(polls(&polling), 2);
 
     assert_eq!(
         polls(&outbound_only),
@@ -67,7 +66,7 @@ async fn an_integration_that_carries_only_outbound_is_never_polled() {
 #[tokio::test]
 async fn an_integration_names_a_repository_as_owner_and_name() {
     let stub = GithubStub::start();
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     kestrel.declare_organization("acme").await;
 
     let refusal = kestrel
@@ -77,7 +76,7 @@ async fn an_integration_names_a_repository_as_owner_and_name() {
             "kestrel",
             &stub.base_url(),
             BOTH,
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await
         .expect_err("a repository that is not owner/name should be refused");
@@ -94,11 +93,12 @@ async fn an_integration_names_a_repository_as_owner_and_name() {
 async fn an_integration_and_what_it_discovers_belong_to_one_organization() {
     let stub = GithubStub::start();
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
     kestrel.declare_organization("globex").await;
 
-    recorded(&kestrel, 1).await;
+    kestrel.work_pass().await;
+    assert_eq!(kestrel.events("acme").await.len(), 1);
 
     assert!(
         kestrel.integrations("globex").await.is_empty(),
@@ -118,7 +118,7 @@ async fn two_organizations_keep_separate_copies_of_the_same_producer_event() {
     let globex = GithubStub::start();
     acme.deliver(labelled_ready(43));
     globex.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     kestrel.declare_organization("acme").await;
     kestrel.declare_organization("globex").await;
     kestrel
@@ -128,7 +128,7 @@ async fn two_organizations_keep_separate_copies_of_the_same_producer_event() {
             REPOSITORY,
             &acme.base_url(),
             BOTH,
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
     kestrel
@@ -138,25 +138,17 @@ async fn two_organizations_keep_separate_copies_of_the_same_producer_event() {
             REPOSITORY,
             &globex.base_url(),
             BOTH,
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    loop {
-        let acme_events = kestrel.events("acme").await;
-        let globex_events = kestrel.events("globex").await;
-        if acme_events.len() == 1 && globex_events.len() == 1 {
-            assert_eq!(acme_events[0].occurrence.id, globex_events[0].occurrence.id);
-            assert_ne!(acme_events[0].record_id, globex_events[0].record_id);
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "both organizations did not retain their own Event"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    kestrel.work_pass().await;
+    let acme_events = kestrel.events("acme").await;
+    let globex_events = kestrel.events("globex").await;
+    assert_eq!(acme_events.len(), 1);
+    assert_eq!(globex_events.len(), 1);
+    assert_eq!(acme_events[0].occurrence.id, globex_events[0].occurrence.id);
+    assert_ne!(acme_events[0].record_id, globex_events[0].record_id);
 
     kestrel.teardown().await;
 }

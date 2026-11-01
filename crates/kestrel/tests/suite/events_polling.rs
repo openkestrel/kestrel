@@ -4,11 +4,10 @@
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 
 use crate::support::events::{
-    BOTH, FETCHED, LISTED, REPOSITORY, eagerly, labelled_ready, polled, polls, recorded, requested,
-    watching,
+    BOTH, FETCHED, LISTED, POLL_INTERVAL, REPOSITORY, labelled_ready, polls, requested, watching,
 };
 use crate::support::github_stub::{self, GithubStub, ScriptedResponse};
 use crate::support::{INSTALLATION_ID, Kestrel};
@@ -17,10 +16,11 @@ use crate::support::{INSTALLATION_ID, Kestrel};
 async fn events_on_a_watched_repository_are_recorded_and_listed() {
     let stub = GithubStub::start();
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let events = recorded(&kestrel, 1).await;
+    kestrel.work_pass().await;
+    let events = kestrel.events("acme").await;
 
     assert_eq!(events.len(), 1);
     assert_eq!(
@@ -42,11 +42,12 @@ async fn two_polls_with_an_overlapping_window_record_each_event_once() {
     let stub = GithubStub::start();
     stub.deliver(labelled_ready(43));
     stub.deliver(labelled_ready(44));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    recorded(&kestrel, 2).await;
-    polled(&stub, 3).await;
+    kestrel.work_pass().await;
+    assert_eq!(kestrel.events("acme").await.len(), 2);
+    kestrel.advance(POLL_INTERVAL).await;
 
     let events = kestrel.events("acme").await;
     assert_eq!(
@@ -69,7 +70,7 @@ async fn two_integrations_in_one_organization_record_one_producer_event() {
     let second = GithubStub::start();
     first.deliver(labelled_ready(43));
     second.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     kestrel.declare_organization("acme").await;
     kestrel
         .register_integration(
@@ -78,7 +79,7 @@ async fn two_integrations_in_one_organization_record_one_producer_event() {
             REPOSITORY,
             &first.base_url(),
             BOTH,
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
     kestrel
@@ -88,12 +89,14 @@ async fn two_integrations_in_one_organization_record_one_producer_event() {
             REPOSITORY,
             &second.base_url(),
             BOTH,
-            eagerly(),
+            SignedDuration::from_secs(1),
         )
         .await;
 
-    polled(&first, 2).await;
-    polled(&second, 2).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
+    assert_eq!(polls(&first), 2);
+    assert_eq!(polls(&second), 2);
 
     assert_eq!(kestrel.events("acme").await.len(), 1);
 
@@ -104,13 +107,15 @@ async fn two_integrations_in_one_organization_record_one_producer_event() {
 async fn polling_resumes_after_a_restart_without_re_recording_what_it_already_saw() {
     let stub = GithubStub::start();
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
-    recorded(&kestrel, 1).await;
+    kestrel.work_pass().await;
+    assert_eq!(kestrel.events("acme").await.len(), 1);
 
     let kestrel = kestrel.kill_and_restart().await;
     let asked = polls(&stub);
-    polled(&stub, asked + 1).await;
+    kestrel.advance(POLL_INTERVAL).await;
+    assert_eq!(polls(&stub), asked + 1);
 
     let events = kestrel.events("acme").await;
     assert_eq!(
@@ -125,16 +130,14 @@ async fn polling_resumes_after_a_restart_without_re_recording_what_it_already_sa
 #[tokio::test]
 async fn a_first_poll_reads_only_what_was_delivered_since_registration() {
     let stub = GithubStub::start();
-    stub.deliver_at(
-        labelled_ready(41),
-        Timestamp::now() - SignedDuration::from_hours(1),
-    );
-    stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
+    stub.deliver_at(labelled_ready(41), kestrel.now());
+    kestrel.away_for(Duration::from_secs(60 * 60));
+    stub.deliver_at(labelled_ready(43), kestrel.now());
     watching(&kestrel, &stub, BOTH).await;
 
-    recorded(&kestrel, 1).await;
-    polled(&stub, 3).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
 
     let events = kestrel.events("acme").await;
     assert_eq!(events.len(), 1);
@@ -152,13 +155,15 @@ async fn another_installations_deliveries_are_not_this_integrations() {
         github_stub::REPOSITORY_ID,
     );
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    recorded(&kestrel, 1).await;
-    polled(&stub, 3).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
 
-    assert_eq!(kestrel.events("acme").await.len(), 1);
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].occurrence.subject.as_deref(), Some("#43"));
     assert_eq!(requested(&stub, FETCHED), 1);
 
     kestrel.teardown().await;
@@ -181,7 +186,7 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
         )
         .await;
     kestrel.work_pass().await;
-    polled(&stub, 1).await;
+    assert_eq!(polls(&stub), 1);
     kestrel.away_for(Duration::from_secs(80 * 60 * 60));
 
     kestrel.work_pass().await;
@@ -211,11 +216,11 @@ async fn a_delivery_about_another_repository_the_app_is_installed_on_is_skipped(
         github_stub::REPOSITORY_ID + 1,
     );
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    recorded(&kestrel, 1).await;
-    polled(&stub, 3).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
 
     let events = kestrel.events("acme").await;
     assert_eq!(events.len(), 1);
@@ -229,16 +234,18 @@ async fn a_delivery_about_another_repository_the_app_is_installed_on_is_skipped(
 #[tokio::test]
 async fn a_delivery_listed_after_a_newer_one_is_still_read() {
     let stub = GithubStub::start();
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
-    let ahead = Timestamp::now() + SignedDuration::from_secs(20);
+    let ahead = kestrel.now() + SignedDuration::from_secs(20);
     stub.deliver_at(labelled_ready(43), ahead);
-    recorded(&kestrel, 1).await;
-    polled(&stub, polls(&stub) + 2).await;
+    kestrel.work_pass().await;
+    assert_eq!(kestrel.events("acme").await.len(), 1);
+    kestrel.advance(POLL_INTERVAL).await;
 
     stub.deliver_at(labelled_ready(44), ahead - SignedDuration::from_secs(10));
 
-    let events = recorded(&kestrel, 2).await;
+    kestrel.advance(POLL_INTERVAL).await;
+    let events = kestrel.events("acme").await;
     assert_eq!(events.len(), 2);
 
     kestrel.teardown().await;
@@ -252,24 +259,24 @@ async fn a_delivery_whose_payload_cannot_be_fetched_leaves_the_poll_where_it_was
     }
     stub.deliver(labelled_ready(43));
     stub.deliver(labelled_ready(44));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
     let registered = kestrel.integrations("acme").await[0].deliveries_read_from;
 
-    while requested(&stub, FETCHED) < 3 {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+    kestrel.work_pass().await;
+    for attempt in 1..=3 {
+        assert_eq!(requested(&stub, FETCHED), attempt);
+        assert_eq!(
+            kestrel.integrations("acme").await[0].deliveries_read_from,
+            registered
+        );
+        assert!(kestrel.events("acme").await.is_empty());
+        if attempt < 3 {
+            kestrel.advance(POLL_INTERVAL).await;
+        }
     }
-    assert_eq!(
-        kestrel.integrations("acme").await[0].deliveries_read_from,
-        registered,
-        "a poll that could not fetch a payload moved on past it"
-    );
-    assert!(
-        kestrel.events("acme").await.is_empty(),
-        "a poll that could not read every new delivery recorded some of them"
-    );
-
-    let events = recorded(&kestrel, 2).await;
+    kestrel.advance(POLL_INTERVAL).await;
+    let events = kestrel.events("acme").await;
     assert_eq!(events.len(), 2);
 
     kestrel.teardown().await;
@@ -278,7 +285,7 @@ async fn a_delivery_whose_payload_cannot_be_fetched_leaves_the_poll_where_it_was
 #[tokio::test]
 async fn the_poll_interval_survives_a_restart() {
     let stub = GithubStub::start();
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     kestrel.declare_organization("acme").await;
     kestrel
         .register_integration(
@@ -309,10 +316,15 @@ async fn a_rate_limited_poll_loses_no_event_and_records_none_twice() {
     let stub = GithubStub::start();
     stub.script_answer("GET", LISTED, github_stub::rate_limited());
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
+    kestrel.work_pass().await;
+    assert!(kestrel.events("acme").await.is_empty());
+    kestrel.advance(POLL_INTERVAL).await;
 
-    let events = recorded(&kestrel, 1).await;
+    assert_eq!(kestrel.events("acme").await.len(), 1);
+    kestrel.advance(POLL_INTERVAL).await;
+    let events = kestrel.events("acme").await;
 
     assert_eq!(events.len(), 1);
     assert_eq!(
@@ -329,10 +341,12 @@ async fn a_payload_over_one_mebibyte_is_refused_rather_than_stored() {
     let oversized = "x".repeat(1024 * 1024 + 1);
     stub.deliver(labelled_ready(43));
     let comment = stub.deliver(github_stub::issue_comment(11, 43, "jack", &oversized));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    polled(&stub, 4).await;
+    kestrel.work_pass().await;
+    kestrel.advance(POLL_INTERVAL).await;
+    assert_eq!(polls(&stub), 2);
 
     let events = kestrel.events("acme").await;
     assert_eq!(
@@ -356,6 +370,15 @@ async fn a_payload_over_one_mebibyte_is_refused_rather_than_stored() {
             .is_none()
     );
 
+    kestrel.advance(POLL_INTERVAL).await;
+    assert_eq!(
+        kestrel.integrations("acme").await[0]
+            .last_event_refusal
+            .as_ref()
+            .and_then(|refusal| refusal.id.as_deref()),
+        Some(comment.as_str())
+    );
+
     kestrel.teardown().await;
 }
 
@@ -364,11 +387,14 @@ async fn a_transient_failure_loses_no_event_and_records_none_twice() {
     let stub = GithubStub::start();
     stub.script_answer("GET", LISTED, ScriptedResponse::answering(502));
     stub.deliver(labelled_ready(43));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     watching(&kestrel, &stub, BOTH).await;
+    kestrel.work_pass().await;
+    assert!(kestrel.events("acme").await.is_empty());
+    kestrel.advance(POLL_INTERVAL).await;
 
-    recorded(&kestrel, 1).await;
-    polled(&stub, 3).await;
+    assert_eq!(kestrel.events("acme").await.len(), 1);
+    kestrel.advance(POLL_INTERVAL).await;
 
     assert_eq!(kestrel.events("acme").await.len(), 1);
 
