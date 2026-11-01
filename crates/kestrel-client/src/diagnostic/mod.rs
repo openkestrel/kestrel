@@ -29,6 +29,7 @@ pub struct Invocation {
     pub operation: String,
     pub args: Vec<String>,
     pub json: bool,
+    pub verbose: bool,
 }
 
 /// A failure nothing classified still offers a next step. An `Unavailable` one had an answer
@@ -92,6 +93,13 @@ pub fn report(error: &anyhow::Error, invocation: &Invocation) -> Exit {
         message(&diagnostic),
         step::described(&diagnostic, &steps, invocation)
     );
+    if invocation.verbose {
+        let _ = writeln!(
+            stderr,
+            "diagnostic: {}",
+            serde_json::to_string(&diagnostic).unwrap_or_default()
+        );
+    }
     if std::io::stdin().is_terminal() && stderr.is_terminal() {
         let chosen = offer::chosen(
             &steps,

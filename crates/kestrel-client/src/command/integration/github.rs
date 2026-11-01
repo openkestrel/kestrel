@@ -1,5 +1,5 @@
 mod connect;
-mod reach;
+use crate::browser as reach;
 
 use anyhow::{Context as _, Result};
 use clap::Subcommand;

@@ -23,19 +23,8 @@ pub async fn show(
     invocation: &Invocation,
     presentation: &Presentation,
 ) -> Result<()> {
-    let (organization, named) = match scoping.derive().await? {
-        Derived::Scope(scope) => {
-            let named = matches!(scope.source, Source::Flag);
-            (Some(scope.organization), named)
-        }
-        Derived::Unnamed { existing } if existing.is_empty() => (None, false),
-        Derived::Unnamed { existing } => bail!(scope::several(&existing)),
-    };
-    let scoped: Vec<(&str, &str)> = organization
-        .iter()
-        .map(|organization| ("organization", organization.as_str()))
-        .collect();
-    let read: wire::Readiness = api.get_where_as(&["readiness"], &scoped).await?;
+    let (read, source) = read(api, scoping).await?;
+    let named = matches!(source, Some(Source::Flag));
 
     let mut out = std::io::stdout().lock();
     if presentation.json() {
@@ -47,6 +36,28 @@ pub async fn show(
     out.flush()?;
     drop(out);
 
+    finish(&read, invocation)
+}
+
+pub(crate) async fn read(
+    api: &ControlPlane,
+    scoping: Scoping<'_>,
+) -> Result<(wire::Readiness, Option<Source>)> {
+    let (organization, source) = match scoping.derive().await? {
+        Derived::Scope(scope) => (Some(scope.organization), Some(scope.source)),
+        Derived::Unnamed { existing } if existing.is_empty() => (None, None),
+        Derived::Unnamed { existing } => bail!(scope::several(&existing)),
+    };
+    let scoped: Vec<(&str, &str)> = organization
+        .iter()
+        .map(|organization| ("organization", organization.as_str()))
+        .collect();
+    let read: wire::Readiness = api.get_where_as(&["readiness"], &scoped).await?;
+
+    Ok((read, source))
+}
+
+pub(crate) fn finish(read: &wire::Readiness, invocation: &Invocation) -> Result<()> {
     if !invocation.json {
         let mut err = std::io::stderr().lock();
         // A failed inspection behind a gap would otherwise surface only once the gap is fixed.
@@ -61,9 +72,9 @@ pub async fn show(
 
     let (exit, blocking) = match read.outcome {
         wire::ReadinessOutcome::Ready => return Ok(()),
-        wire::ReadinessOutcome::Blocked => (Exit::NotReady, read.gaps.into_iter().next()),
+        wire::ReadinessOutcome::Blocked => (Exit::NotReady, read.gaps.first().cloned()),
         wire::ReadinessOutcome::Unavailable => {
-            (Exit::Unavailable, read.unavailable.into_iter().next())
+            (Exit::Unavailable, read.unavailable.first().cloned())
         }
     };
     match blocking {
@@ -195,6 +206,7 @@ mod tests {
             operation: String::new(),
             args: Vec::new(),
             json: false,
+            verbose: false,
         }
     }
 

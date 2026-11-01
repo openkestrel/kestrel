@@ -521,26 +521,35 @@ pub const INSTANCES: Columns<wire::HeldInstance> = Columns::Rows(&[
 pub const RELEASED: Columns<wire::ReleasedInstance> =
     Columns::Value(Column("instance", |record| text(&record.instance)));
 pub const STATUS: Columns<crate::Status> = Columns::Detail(&[
-    Column("control plane", |record| {
-        text(&record.location.control_plane)
+    Column("Client", |record| text(&record.client_url)),
+    Column("readiness", |record| text(&record.readiness.outcome)),
+    Column("Workspaces open", |record| {
+        text(record.workspace_counts["open"])
     }),
-    Column("control plane source", |record| {
-        text(&record.location.control_plane_source)
+    Column("Workspaces sealed", |record| {
+        text(record.workspace_counts["sealed"])
     }),
-    Column("organization", |record| text(&record.organization)),
-    Column("organization source", |record| {
-        text(&record.organization_source)
+    Column("Sessions queued", |record| {
+        text(record.session_counts["queued"])
     }),
-    Column("projects", |record| text(record.projects)),
-    Column("agents", |record| text(record.agents)),
-    Column("triggers", |record| text(record.triggers)),
-    Column("workspaces", |record| text(record.workspaces)),
-    Column("integrations", |record| text(record.integrations)),
-    Column("credentials", |record| text(record.credentials)),
-    Column("profiles", |record| text(record.profiles)),
-    Column("next", |record| text(&record.next)),
-]);
-pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
+    Column("Sessions working", |record| {
+        text(record.session_counts["working"])
+    }),
+    Column("Sessions trailing", |record| {
+        text(record.session_counts["trailing"])
+    }),
+    Column("Sessions waiting", |record| {
+        text(record.session_counts["waiting"])
+    }),
+    Column("Sessions unbriefed", |record| {
+        text(record.session_counts["unbriefed"])
+    }),
+    Column("Sessions ended", |record| {
+        text(record.session_counts["ended"])
+    }),
+    Column("Sessions unreachable", |record| {
+        text(record.session_counts["unreachable"])
+    }),
     Column("control plane", |record| {
         text(&record.location.control_plane)
     }),
@@ -553,8 +562,13 @@ pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
     Column("organization source", |record| {
         or_absent(record.organization_source.as_ref())
     }),
-    Column("organizations", |record| joined(&record.organizations)),
-    Column("next", |record| text(&record.next)),
+    Column("projects", |record| text(record.projects)),
+    Column("agents", |record| text(record.agents)),
+    Column("triggers", |record| text(record.triggers)),
+    Column("workspaces", |record| text(record.workspaces)),
+    Column("integrations", |record| text(record.integrations)),
+    Column("credentials", |record| text(record.credentials)),
+    Column("profiles", |record| text(record.profiles)),
 ]);
 pub const EXIT_CODES: Columns<crate::exit::Record> = Columns::Detail(&[
     Column("code", |record| text(record.code)),
