@@ -16,6 +16,7 @@ pub mod database;
 pub mod diagnostics;
 pub mod docker;
 pub mod environment;
+pub mod events;
 pub mod fixture;
 pub mod git;
 pub mod github_stub;

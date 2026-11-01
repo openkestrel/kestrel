@@ -85,7 +85,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel/tests/suite/deliberate.rs token-budget-exempt=803
 
-/crates/kestrel/tests/suite/events.rs token-budget-exempt=850
 
 /crates/kestrel/tests/suite/follow_up.rs token-budget-exempt=795
 
