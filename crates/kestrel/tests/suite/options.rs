@@ -1,3 +1,6 @@
+//! Stepped throughout (ADR-0059, ADR-0060): a test claims, prompts and sweeps with a `work_pass` it
+//! asks for, and waits only on the harness, whose supervisor keeps real time.
+
 use crate::support;
 
 use std::time::Duration;
@@ -6,6 +9,7 @@ use kestrel::domain::{
     Declared, Exit, Session, SessionId, SessionOption, SessionOptionKind, SessionOptionValue,
     SessionState, Workspace, WorkspaceId,
 };
+use kestrel::link::Instruction;
 use kestrel::log::Entry;
 use kestrel::operator;
 use kestrel::work;
@@ -22,7 +26,6 @@ use support::supervisor;
 use support::{Kestrel, OnTheLink};
 
 const PATIENCE: Duration = Duration::from_secs(30);
-const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_millis(500);
 
 fn declared(model: Option<&str>, mode: Option<&str>, thought_level: Option<&str>) -> Declared {
     Declared {
@@ -40,6 +43,8 @@ fn current(session: &Session, category: &str) -> Option<String> {
         .and_then(|option| option.current_value())
 }
 
+/// What the harness reports it is on reaches the control plane from a supervisor that keeps real
+/// time, and its bookkeeping report is debounced, so a value it has just moved to is waited for.
 async fn until_current(kestrel: &Kestrel, session: SessionId, category: &str) -> String {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -56,7 +61,6 @@ async fn until_current(kestrel: &Kestrel, session: SessionId, category: &str) ->
     }
 }
 
-/// The bookkeeping report is debounced, so a value the harness just moved to is waited for.
 async fn until_current_is(kestrel: &Kestrel, session: SessionId, category: &str, value: &str) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -83,7 +87,7 @@ fn failed(session: &Session) -> String {
 }
 
 async fn dispatching(script: Script) -> Kestrel {
-    Kestrel::dispatching_to(supervisor::binary(), &scripted_agent::playing(script)).await
+    Kestrel::stepped_dispatching_to(supervisor::binary(), &scripted_agent::playing(script)).await
 }
 
 async fn a_workspace(kestrel: &Kestrel, agent: Declared) -> Workspace {
@@ -107,6 +111,7 @@ async fn a_session_naming_a_mode_sets_it_over_the_agents_before_its_first_prompt
         .enqueue_session_declaring(workspace.id, declared(None, Some(SWITCHED_MODE), None))
         .await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "model").await,
@@ -128,6 +133,7 @@ async fn a_category_left_undeclared_stays_at_the_harness_default() {
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "model").await,
@@ -155,6 +161,7 @@ async fn a_thought_level_the_harness_does_not_offer_fails_the_session() {
     let workspace = a_workspace(&kestrel, declared(None, None, Some("deeper"))).await;
     let session = kestrel.enqueue_session(workspace.id).await;
 
+    kestrel.work_pass().await;
     let session = kestrel.after_one_turn(session.id).await;
 
     let because = failed(&session);
@@ -170,6 +177,7 @@ async fn a_mode_a_harness_offers_no_way_to_set_fails_the_session() {
     let workspace = a_workspace(&kestrel, declared(None, Some(SWITCHED_MODE), None)).await;
     let session = kestrel.enqueue_session(workspace.id).await;
 
+    kestrel.work_pass().await;
     let session = kestrel.after_one_turn(session.id).await;
 
     let because = failed(&session);
@@ -187,6 +195,7 @@ async fn a_legacy_modes_harness_is_set_through_session_set_mode() {
         .enqueue_session_declaring(workspace.id, declared(None, Some(OTHER_MODE), None))
         .await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "mode").await,
@@ -208,6 +217,7 @@ async fn a_recovered_harness_has_the_declared_mode_applied_again() {
         .enqueue_session_declaring(workspace.id, declared(None, Some(SWITCHED_MODE), None))
         .await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "mode").await,
@@ -218,6 +228,7 @@ async fn a_recovered_harness_has_the_declared_mode_applied_again() {
         .post_while_busy(workspace.id, "operator", "the second thing to do")
         .await
         .expect("a waiting session takes the message as its next prompt");
+    kestrel.work_pass().await;
     let answered = kestrel.answered(session.id, 2).await;
 
     assert_eq!(answered.state, SessionState::Waiting, "{:?}", answered.exit);
@@ -280,6 +291,15 @@ async fn changed_entries(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<Entry
         .collect()
 }
 
+/// The one change the control plane itself recorded, which is there as `set_option` returns.
+async fn the_option_change(kestrel: &Kestrel, workspace: WorkspaceId) -> Entry {
+    let mut changed = changed_entries(kestrel, workspace).await;
+    assert_eq!(changed.len(), 1, "{changed:?}");
+
+    changed.remove(0)
+}
+
+/// The change the harness reported back, which arrives on the link after the instruction it took.
 async fn until_changed(kestrel: &Kestrel, workspace: WorkspaceId) -> Entry {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -295,6 +315,7 @@ async fn until_changed(kestrel: &Kestrel, workspace: WorkspaceId) -> Entry {
     }
 }
 
+/// A state the harness moves the session to, which no work pass waits for.
 async fn until_state(kestrel: &Kestrel, session: SessionId, state: SessionState) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -337,6 +358,7 @@ async fn changing_the_model_on_a_waiting_session_runs_the_next_turn_on_it() {
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "model").await,
@@ -365,6 +387,7 @@ async fn changing_the_model_on_a_waiting_session_runs_the_next_turn_on_it() {
         .post_while_busy(workspace.id, "operator", "keep going")
         .await
         .expect("a waiting session takes the message as its next prompt");
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 2).await;
 
     until_current_is(&kestrel, session.id, "model", OTHER_MODEL).await;
@@ -405,6 +428,7 @@ async fn changing_the_synthesized_mode_of_a_legacy_harness_goes_through_session_
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
 
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     assert_eq!(
         until_current(&kestrel, session.id, "mode").await,
@@ -433,7 +457,7 @@ async fn changing_the_synthesized_mode_of_a_legacy_harness_goes_through_session_
 
 #[tokio::test]
 async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
     assert_eq!(session.state, SessionState::Queued);
@@ -452,7 +476,6 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
     assert_eq!(changed["thought_level"], OTHER_THOUGHT_LEVEL);
     assert_eq!(changed["changing_options"], json!([]));
 
-    let entry = until_changed(&kestrel, workspace.id).await;
     let Entry::OptionChanged {
         participant,
         option,
@@ -461,9 +484,9 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
         to,
         refused,
         ..
-    } = entry
+    } = the_option_change(&kestrel, workspace.id).await
     else {
-        unreachable!("until_changed only returns option changes")
+        unreachable!("the_option_change only returns option changes")
     };
     assert_eq!(participant, "operator");
     assert_eq!(option, "thought_level");
@@ -480,6 +503,7 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
             2,
         )
         .await;
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     until_current_is(&kestrel, session.id, "thought_level", OTHER_THOUGHT_LEVEL).await;
 
@@ -492,6 +516,8 @@ async fn changing_the_mode_while_trailing_leaves_the_session_trailing() {
     let kestrel = dispatching(Script::AnswersWithAToolKeptOpen).await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
+
+    kestrel.work_pass().await;
     until_state(&kestrel, session.id, SessionState::Trailing).await;
     until_current_is(&kestrel, session.id, "mode", STARTING_MODE).await;
 
@@ -537,7 +563,8 @@ async fn a_change_during_a_working_turn_is_refused_naming_working() {
     let session = kestrel.enqueue_session(workspace.id).await;
     kestrel.work_pass().await;
 
-    until_state(&kestrel, session.id, SessionState::Working).await;
+    let working = kestrel.session(session.id).await;
+    assert_eq!(working.state, SessionState::Working, "{:?}", working.exit);
     let (status, refused) = set_option(
         &kestrel,
         session.id,
@@ -553,10 +580,12 @@ async fn a_change_during_a_working_turn_is_refused_naming_working() {
         "{refused}"
     );
     assert!(
-        !matches!(
-            kestrel.database().latest_instruction(&session).await,
-            kestrel::link::Instruction::SetOption { .. }
-        ),
+        kestrel
+            .database()
+            .instructions(&session)
+            .await
+            .iter()
+            .all(|instruction| !matches!(instruction, Instruction::SetOption { .. })),
         "a refused change reached the harness"
     );
 
@@ -565,11 +594,8 @@ async fn a_change_during_a_working_turn_is_refused_naming_working() {
 
 #[tokio::test]
 async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
-    let kestrel = dispatching(Script::Speaks).await;
-    let workspace = a_workspace(&kestrel, Declared::default()).await;
-    let session = kestrel.enqueue_session(workspace.id).await;
-    kestrel.answered(session.id, 1).await;
-    until_current(&kestrel, session.id, "model").await;
+    let kestrel = Kestrel::stepped().await;
+    let (session, _) = live_on_the_link(&kestrel).await;
 
     let (status, refused) = set_option(
         &kestrel,
@@ -626,7 +652,7 @@ async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
 
 #[tokio::test]
 async fn a_category_with_no_option_an_ended_session_and_an_undeclarable_category_are_refused() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (session, _) = live_on_the_link(&kestrel).await;
 
     let (status, refused) = set_option(
@@ -679,6 +705,8 @@ async fn a_harness_that_refuses_a_change_leaves_the_options_and_records_why() {
     let kestrel = dispatching(Script::RefusesOptions).await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
+
+    kestrel.work_pass().await;
     kestrel.answered(session.id, 1).await;
     until_current(&kestrel, session.id, "model").await;
 
@@ -722,10 +750,12 @@ async fn a_harness_that_refuses_a_change_leaves_the_options_and_records_why() {
     kestrel.teardown().await;
 }
 
+/// The change is written while nothing is reading the stream, so reconnecting is the only way it
+/// reaches the harness: once, and once only.
 #[tokio::test]
 async fn a_change_written_while_the_supervisor_is_disconnected_is_applied_once_after_it_reconnects()
 {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (session, on) = live_on_the_link(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
@@ -764,21 +794,35 @@ async fn a_change_written_while_the_supervisor_is_disconnected_is_applied_once_a
         .expect("an instruction id")
         .parse()
         .expect("a cursor");
+    let (status, _) = set_option(
+        &kestrel,
+        session.id,
+        json!({"participant": "operator", "option": "model", "value": DEFAULT_MODEL}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // What reconnecting with the change's own cursor is handed is the change after it, so the one
+    // it already had was never handed again.
     let mut settled = link.open(&on.instance, &on.credential, Some(once)).await;
-    assert!(
-        matches!(
-            settled.next_within(LONG_ENOUGH_TO_BE_SURE).await,
-            Next::Quiet
-        ),
+    let Next::Event(next) = settled.next_within(PATIENCE).await else {
+        panic!("the reconnected stream was handed nothing");
+    };
+    assert_eq!(next.name.as_deref(), Some("set_option"));
+    assert_eq!(
+        next.id.expect("an instruction id"),
+        (once + 1).to_string(),
         "reconnecting with the change's cursor was handed it again"
     );
+    let body: Value = serde_json::from_str(&next.data).expect("the instruction body");
+    assert_eq!(body["value"], DEFAULT_MODEL);
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
 async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_settles() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let (session, _) = live_on_the_link(&kestrel).await;
 
     let (status, changed) = set_option(
@@ -826,8 +870,9 @@ async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_set
     );
     assert_eq!(current(&settled, "model").as_deref(), Some(OTHER_MODEL));
 
-    let Entry::OptionChanged { to, .. } = until_changed(&kestrel, session.workspace).await else {
-        unreachable!("until_changed only returns option changes")
+    let Entry::OptionChanged { to, .. } = the_option_change(&kestrel, session.workspace).await
+    else {
+        unreachable!("the_option_change only returns option changes")
     };
     assert_eq!(to.as_deref(), Some(OTHER_MODEL));
 
