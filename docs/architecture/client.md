@@ -197,6 +197,18 @@ default branches, finishes with the one chosen and then declares its Project; ca
 offers a new flow and never claims to delete or uninstall the App. Each GitHub Integration shows its
 hook read, never as proof of reachability, and sets its URL through the shared maintenance write.
 
+Each GitHub Integration (`src/components/settings/integration.tsx`) shows its state as the
+Integration read gives it, with its Organization, repository and directions, and whether a Project
+selecting it is paused or retired; retirement is local to kestrel and never worded as removing the
+App. Pausing, rotating the webhook secret, replacing the App private key and retiring each show
+their consequence (`src/operator/integrations.ts`) and send only on an explicit confirmation,
+retirement only once the Integration's name is typed, naming the revision the person saw; resuming
+sends at once. A key is chosen from a file, held in component state only until it is sent, and a
+refused one says the current key stays. An unfinished rotation is shown from the record's
+`webhook_secret_rotation`, and its resume is the step that record's diagnostic offers; no other
+rotation is offered meanwhile. A retired Integration shows the posts retiring it left unposted.
+Every refusal, a shared App's included, is the producer's Diagnostic, and nothing is resent by itself.
+
 `/organizations/$organization/settings/agents` lists, declares and edits Agents through the shared
 Agent declaration, which is the Agent's whole desired state: an edit sends back every default the
 Agent holds, and its name is its identity. The harness catalogue and its image availability decide

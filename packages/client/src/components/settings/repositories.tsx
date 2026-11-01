@@ -2,8 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Page, PageTitle } from "#/components/page";
-import { Diagnosis, Refusal, RetryFallback } from "#/components/refusal";
-import { ConnectGithub, Webhook } from "#/components/settings/github";
+import { Refusal, RetryFallback } from "#/components/refusal";
+import { ConnectGithub } from "#/components/settings/github";
+import { IntegrationCard } from "#/components/settings/integration";
 import { ProjectForm } from "#/components/settings/project-form";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
@@ -27,6 +28,16 @@ export function RepositoriesSettings({ organization }: { organization: string })
 	const [connecting, setConnecting] = useState(false);
 	const [saved, setSaved] = useState<string>();
 	const github = (integrations.data ?? []).filter(({ kind }) => kind === "github");
+
+	// A Project keeps its selection through a pause or a retirement, so the listing says which.
+	function standing(id: string): string {
+		const state = github.find((integration) => integration.id === id)?.state;
+		return state === "disabled"
+			? ", which is paused"
+			: state === "retired"
+				? ", which is retired"
+				: "";
+	}
 
 	function edit(declared: Project | undefined) {
 		setSaved(undefined);
@@ -121,7 +132,7 @@ export function RepositoriesSettings({ organization }: { organization: string })
 													<span className="break-all font-mono">{repository}</span>
 													<span className="text-muted-foreground">
 														{selected
-															? ` · reaches GitHub as ${selected.integration}`
+															? ` · reaches GitHub as ${selected.integration}${standing(selected.integration_id)}`
 															: " · no App authority"}
 													</span>
 												</li>
@@ -182,27 +193,12 @@ export function RepositoriesSettings({ organization }: { organization: string })
 					) : (
 						<ul className="grid gap-2">
 							{github.map((integration) => (
-								<li
+								<IntegrationCard
 									key={integration.id}
-									data-integration={integration.name}
-									className="grid gap-2 border p-3 text-sm"
-								>
-									<div className="flex flex-wrap items-center gap-x-3">
-										<span className="font-medium">{integration.name}</span>
-										<span className="text-muted-foreground text-xs">
-											watches {integration.repository ?? "no repository"} · {integration.state}
-										</span>
-									</div>
-									{integration.diagnostic && (
-										<Diagnosis
-											diagnostic={integration.diagnostic}
-											retry={() => void integrations.refetch()}
-										/>
-									)}
-									{integration.state !== "retired" && (
-										<Webhook organization={organization} integration={integration} />
-									)}
-								</li>
+									organization={organization}
+									integration={integration}
+									retry={() => void integrations.refetch()}
+								/>
 							))}
 						</ul>
 					))}

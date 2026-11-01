@@ -330,7 +330,7 @@ describe("enqueueing a Session", () => {
 		});
 	});
 
-	it("describes replacing an Integration's private key without holding the key", () => {
+	it("links replacing an Integration's private key to its settings without holding the key", () => {
 		expect(
 			stepOf(
 				{
@@ -342,10 +342,12 @@ describe("enqueueing a Session", () => {
 				ORIGIN,
 			),
 		).toEqual({
-			kind: "guidance",
-			label: "Replace the Integration github's App private key",
-			detail:
-				"GitHub asks for 30s first. The key is read from standard input or a file, never from the command.",
+			kind: "link",
+			label: "Replace the Integration github's App private key after 30s, as GitHub asks",
+			link: {
+				to: "/organizations/$organization/settings/repositories",
+				params: { organization: "acme" },
+			},
 			command: `kestrel integration github replace-key github --organization acme --control-plane ${ORIGIN}`,
 		});
 	});
