@@ -489,28 +489,25 @@ async fn execute(
         }
     };
 
-    let supervisor = match supervised(
+    if let Err(error) = supervised(
         store,
         dispatch,
         supervisors,
+        session,
         &workspace,
         &mut instance,
         started.seq - 1,
     )
     .await
     {
-        Ok(supervisor) => supervisor,
-        Err(error) => {
-            work::fail(
-                store,
-                session,
-                &format!("the supervisor could not be started on the instance {name}: {error:#}"),
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-    work::supervised(store, session, &name, supervisor.as_deref()).await?;
+        work::fail(
+            store,
+            session,
+            &format!("the supervisor could not be started on the instance {name}: {error:#}"),
+        )
+        .await?;
+        return Ok(());
+    }
     info!(session = %session.id, instance = name, "a session was started on its instance's supervisor");
 
     Ok(())
@@ -522,21 +519,22 @@ async fn supervised(
     store: &Store,
     dispatch: &Dispatch,
     supervisors: &Supervisors,
+    session: &Session,
     workspace: &Workspace,
     instance: &mut Instance,
     after: i64,
-) -> Result<Option<String>> {
+) -> Result<()> {
     let name = instance.name().to_owned();
     let held = supervisors.held_on(&name);
     if let Held::Running(running) = held {
-        return Ok(Some(running));
+        return work::supervised(store, session, &name, Some(&running)).await;
     }
     let recorded = store.read().await?.workspaces().supervisor(&name).await?;
     if let Some(recorded) = recorded {
         if matches!(held, Held::Nothing)
             && link::on_the_link(recorded.reached_at, store.clock().now())
         {
-            return Ok(recorded.name);
+            return work::supervised(store, session, &name, recorded.name.as_deref()).await;
         }
         if let Some(supervisor) = &recorded.name {
             dispatch.driver.stop_named(supervisor).with_context(|| {
@@ -576,6 +574,9 @@ async fn supervised(
     tx.workspaces()
         .name_supervisor(&name, &credential.digest(), supervisor.name())
         .await?;
+    tx.workspaces()
+        .record_supervisor(session, &name, Some(supervisor.name()))
+        .await?;
     tx.commit().await?;
     info!(
         instance = name,
@@ -589,10 +590,10 @@ async fn supervised(
     if let Some(err) = supervisor.take_stderr() {
         relay(&name, err);
     }
-    let started = supervisor.name().to_owned();
+    // The exit watcher must not see a supervisor before its Session records it.
     supervisors.held().insert(name, supervisor);
 
-    Ok(Some(started))
+    Ok(())
 }
 
 /// The Workspace's own Instance, or a fresh one for a Workspace that has none. `None` once the

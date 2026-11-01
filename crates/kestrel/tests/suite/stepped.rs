@@ -438,6 +438,31 @@ async fn a_session_claimed_in_the_pass_that_archives_its_workspaces_instance_sta
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_supervisor_that_exits_before_the_next_pass_keeps_its_sessions_supervisor() {
+    let environment = Environment::executing("exit 3");
+    let kestrel = Kestrel::stepped_dispatching_to(environment.path(), "unused").await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+
+    kestrel.work_pass().await;
+    let dispatched = kestrel.session(session.id).await;
+    let supervisor = dispatched.supervisor.as_deref().expect("a supervisor");
+    Environment::named(supervisor).is_gone().await;
+
+    kestrel.work_pass().await;
+    let ended = kestrel.session(session.id).await;
+    assert_eq!(ended.state, SessionState::Ended);
+    assert!(
+        matches!(&ended.exit, Some(Exit::Failed { because }) if because.contains("without reporting how the session went")),
+        "{ended:?}"
+    );
+    assert_eq!(ended.supervisor, dispatched.supervisor);
+
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_session_stopped_before_the_pass_that_finds_its_supervisor_gone_stays_stopped() {
     let kestrel = dispatching().await;
     let stopped = a_workspace(&kestrel).await;
