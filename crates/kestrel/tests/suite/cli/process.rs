@@ -1,5 +1,6 @@
 //! These permanent live exceptions exercise OS process death, which an in-process work pass cannot reproduce.
 
+use super::fixture::succeeded;
 use crate::support;
 
 use std::io::{BufRead, BufReader};
@@ -32,7 +33,6 @@ impl Drop for Kestrel {
     }
 }
 
-/// A control plane running over a [`Kestrel`]'s data directory, and every line it has said.
 struct Booted {
     child: Child,
     operator: String,
@@ -173,17 +173,6 @@ impl Drop for Booted {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-fn succeeded(args: &[&str], finished: &Finished) -> String {
-    assert!(
-        finished.status.success(),
-        "`kestrel {}` failed with {}:\n{}",
-        args.join(" "),
-        finished.status,
-        finished.err
-    );
-    finished.out.join("\n")
 }
 
 fn operator_of(said: &Mutex<String>) -> String {
@@ -430,8 +419,9 @@ async fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
             .expect("the Session supervisor"),
     );
     let transcript = transcribed(&restarted, &workspace);
-    supervisor.is_gone().await;
     restarted.terminated();
+    drop(kestrel);
+    supervisor.is_gone().await;
 
     assert_eq!(
         listed[0]["exit"]["status"], "succeeded",

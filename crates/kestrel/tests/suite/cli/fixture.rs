@@ -1,18 +1,15 @@
 use crate::support;
 
-use std::fs::File;
 use std::time::Duration;
 
 use serde_json::Value;
 use support::client::{self, Finished, Invocation};
 use support::scripted_agent::{self, Script};
-use tempfile::NamedTempFile;
 
 pub(super) struct Booted {
     pub plane: support::Kestrel,
     operator: String,
-    log: Option<NamedTempFile>,
-    _subscriber: Option<tracing::subscriber::DefaultGuard>,
+    log: Option<support::operator_log::Trace>,
 }
 
 impl Booted {
@@ -26,22 +23,13 @@ impl Booted {
             operator: plane.operator(),
             plane,
             log: None,
-            _subscriber: None,
         }
     }
 
     pub async fn traced() -> Self {
-        let log = NamedTempFile::new().expect("a private operator log");
-        let writer: File = log.reopen().expect("the log should open for tracing");
-        let subscriber = tracing_subscriber::fmt()
-            .with_env_filter("trace")
-            .with_ansi(false)
-            .with_writer(writer)
-            .finish();
-        let subscriber = tracing::subscriber::set_default(subscriber);
+        let log = support::operator_log::capturing_trace();
         let mut booted = Self::playing(Script::Speaks).await;
         booted.log = Some(log);
-        booted._subscriber = Some(subscriber);
         booted
     }
 
@@ -110,8 +98,7 @@ impl Booted {
     }
 
     pub fn said(&self) -> String {
-        std::fs::read_to_string(self.log.as_ref().expect("tracing should be enabled").path())
-            .expect("the operator log should read")
+        self.log.as_ref().expect("tracing should be enabled").said()
     }
 }
 
