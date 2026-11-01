@@ -321,10 +321,10 @@ async fn open_launches_a_local_browser_with_the_url_it_printed() {
     assert_eq!(opened.status.code(), Some(0), "{}", opened.said);
     let url = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if let Ok(url) = std::fs::read_to_string(&captured) {
-                if !url.is_empty() {
-                    break url;
-                }
+            if let Ok(url) = std::fs::read_to_string(&captured)
+                && !url.is_empty()
+            {
+                break url;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
