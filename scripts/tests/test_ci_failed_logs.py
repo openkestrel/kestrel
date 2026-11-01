@@ -24,12 +24,52 @@ def response(text, code=0):
 
 
 class FailedLogsTest(unittest.TestCase):
-    def invoke(self, replies, *arguments):
+    def invoke(self, replies, *arguments, target=("123",)):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.object(CLI.subprocess, "run", side_effect=replies) as requests:
+        with patch.object(CLI.subprocess, "run", side_effect=replies) as requests, patch.object(CLI.time, "sleep") as sleep:
             with redirect_stdout(stdout), redirect_stderr(stderr):
-                code = CLI.main(["123", "--repo", "openkestrel/kestrel", *arguments])
+                code = CLI.main([*target, "--repo", "openkestrel/kestrel", *arguments])
+        self.slept = sleep.call_count
         return code, stdout.getvalue(), stderr.getvalue(), requests.call_args_list
+
+    def test_waits_on_a_pull_requests_ci_run_until_a_job_fails(self):
+        runs = {"workflow_runs": [
+            {"id": 7, "path": ".github/workflows/ci.yml"},
+            {"id": 9, "path": ".github/workflows/ci.yml"},
+            {"id": 11, "path": ".github/workflows/issue-link.yml"},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            code, output, errors, calls = self.invoke(
+                [response(json.dumps({"head": {"sha": "abc"}})), response(json.dumps(runs)),
+                 response(json.dumps([{"jobs": [job(1, "in_progress", None)]}])),
+                 response(json.dumps({"status": "in_progress"})),
+                 response(json.dumps([{"jobs": [job(1, "in_progress", None), job(2)]}])),
+                 response("error: broke\n")],
+                "--wait", "--output-dir", directory, target=("--pr", "913"),
+            )
+            self.assertEqual(code, 0, errors)
+            self.assertEqual(self.slept, 1)
+            self.assertIn("Run 9: 1 completed failed/cancelled jobs; 1 unfinished jobs.", output)
+            self.assertTrue(any("head_sha=abc" in arg for arg in calls[1].args[0]))
+            self.assertIn("repos/openkestrel/kestrel/actions/jobs/2/logs", calls[-1].args[0])
+
+    def test_waiting_ends_when_the_run_completes_without_a_failure(self):
+        code, output, errors, _ = self.invoke(
+            [response(json.dumps([{"jobs": [job(1, conclusion="success")]}])),
+             response(json.dumps({"status": "completed"}))],
+            "--wait",
+        )
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(self.slept, 0)
+        self.assertIn("completed with no failed or cancelled job", output)
+
+    def test_a_pull_request_without_a_ci_run_is_an_error_unless_waiting(self):
+        code, output, errors, _ = self.invoke(
+            [response(json.dumps({"head": {"sha": "abc"}})), response(json.dumps({"workflow_runs": []}))],
+            target=("--pr", "913"),
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("No CI run for pull request 913", errors)
 
     def test_reads_failed_jobs_across_pages_while_other_jobs_are_running(self):
         pages = [

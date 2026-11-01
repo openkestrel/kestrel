@@ -15,23 +15,49 @@ screen, before and after) and #702 (a new screen, a recording and stills) are th
 
 ## Capture
 
-`playwright-cli` drives the browser and an e2e spec supplies the page: the spec boots the control
-plane and the Client, seeds them, installs its scripted streams and reads, then holds still.
-`playwright-cli --help` names the skill it ships with; read that skill's `video-recording.md`
-before recording. Run these from `packages/client`.
+An e2e spec supplies the page: it boots the control plane and the Client, seeds them, and
+installs its scripted streams and reads. Pick the test in `e2e/` that reaches the state, or the
+nearest one, and capture from it into `evidence/`, which git ignores. Run these from
+`packages/client`.
 
-1. Pick the test in `e2e/` that reaches the state, or the nearest one. Any test gives a running,
-   empty control plane to drive by hand from its first line.
+### From a copy of the spec
 
-2. Start it paused, in the background, and wait for `Debugging Instructions` in its output:
+The default, and one foreground command: copy the test into `e2e/zz-evidence.spec.ts` and add a
+capture at each state worth a still.
+
+```ts
+test.use({ viewport: { width: 1280, height: 800 }, video: "on" }); // video only for a recording
+// …the copied test, up to each state:
+await page.screenshot({ path: "evidence/transcript-after.png" });
+await page.emulateMedia({ colorScheme: "dark" });
+await page.setViewportSize({ width: 375, height: 800 });
+await page.screenshot({ path: "evidence/transcript-dark-375-after.png" });
+```
+
+```sh
+bun run build
+bunx playwright test e2e/zz-evidence.spec.ts --output=evidence/results
+cp evidence/results/*/video.webm evidence/steps.webm   # a recording
+rm e2e/zz-evidence.spec.ts                             # before committing
+```
+
+A copy runs on the shared control plane like any spec: keep the Organization `acme` and declare
+nothing the other specs would see.
+
+### Paused, by hand
+
+For a state easier to reach by clicking than by code. `playwright-cli` drives the browser while
+the test holds still; `playwright-cli --help` names the skill it ships with; read that skill's
+`video-recording.md` before recording.
+
+1. Start the test paused, in the background, and wait for `Debugging Instructions` in its output:
 
    ```sh
    bun run build
    bunx playwright test e2e/transcript.spec.ts -g "attributed to its Participant" --debug=cli
    ```
 
-3. Attach with the session it names, run to the line where the state exists, and capture into
-   `evidence/`, which git ignores:
+2. Attach with the session it names, run to the line where the state exists, and capture:
 
    ```sh
    playwright-cli attach tw-a0180e
@@ -48,23 +74,23 @@ before recording. Run these from `packages/client`.
 
    From the pause the page is yours: click, type, `route` a read, `goto` another route.
 
-4. Read every PNG. Capture is done when each still shows the state its name claims, with no
-   spinner, empty pane or half-loaded font.
+3. `playwright-cli -s=tw-a0180e resume` lets the test finish, which stops the servers.
 
-5. `playwright-cli -s=tw-a0180e resume` lets the test finish, which stops the servers.
+### Done
+
+Read every PNG. Capture is done when each still shows the state its name claims, with no spinner,
+empty pane or half-loaded font.
 
 ### Before
 
-When an existing screen changed, repeat steps 2 to 5 with the Client built from the merge-base,
-pausing at the same line and naming the files `-before`. The spec, its fixtures and the control
-plane stay this branch's; only the served Client is old.
+When an existing screen changed, capture the same state again with the Client built from the
+merge-base, naming the files `-before`. The spec, its fixtures and the control plane stay this
+branch's; only the served Client is old. `scripts/build-client-at.sh` builds it (once per commit)
+and prints where it is:
 
 ```sh
-base=$(git merge-base HEAD origin/main)
-mkdir -p "$TMPDIR/kestrel-base" && git archive "$base" | tar -x -C "$TMPDIR/kestrel-base"
-(cd "$TMPDIR/kestrel-base/packages/client" && bun install --frozen-lockfile && bun run build)
-KESTREL_CLIENT_ROOT="$TMPDIR/kestrel-base/packages/client/dist/client" \
-	bunx playwright test e2e/transcript.spec.ts -g "attributed to its Participant" --debug=cli
+KESTREL_CLIENT_ROOT=$(../../scripts/build-client-at.sh) \
+	bunx playwright test e2e/zz-evidence.spec.ts --output=evidence/results
 ```
 
 ## Publish

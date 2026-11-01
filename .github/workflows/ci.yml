@@ -80,6 +80,23 @@ jobs:
             .github/scripts/changed-areas.sh < /dev/null
           fi
 
+  files:
+    name: files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Hold added and modified files to the token budget
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: .githooks/pre-commit "${BASE}" "${HEAD}"
+
+      - name: Refuse docs that name a missing path or test
+        run: python3 scripts/doc-references.py
+
   release-version:
     name: release-version
     needs: changes
@@ -525,6 +542,7 @@ jobs:
     name: gate
     needs:
       - changes
+      - files
       - release-version
       - lint
       - workspace-archive

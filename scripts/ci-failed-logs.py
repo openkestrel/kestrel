@@ -5,9 +5,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 
 
+POLL = 30
+PATIENCE = 2 * 60 * 60
 FAILED = {"failure", "timed_out", "startup_failure", "action_required", "cancelled"}
 ESCAPES = re.compile(
     r"(?:\x1b\[[0-?]*[ -/]*[@-~]|\x9b[0-?]*[ -/]*[@-~]"
@@ -88,6 +91,26 @@ def jobs_from_pages(text):
         raise RuntimeError(f"Invalid GitHub jobs response: {error}") from error
 
 
+def parsed(text, what):
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        raise RuntimeError(f"Invalid GitHub {what} response: {error}") from error
+
+
+def run_of_pull(repo, number):
+    sha = parsed(api(f"repos/{repo}/pulls/{number}"), "pull request")["head"]["sha"]
+    runs = parsed(api(f"repos/{repo}/actions/runs?head_sha={sha}&event=pull_request&per_page=100"), "runs")
+    ci = [run["id"] for run in runs["workflow_runs"] if run.get("path") == ".github/workflows/ci.yml"]
+    return max(ci) if ci else None
+
+
+def settled(repo, run_id, jobs):
+    if any(job["status"] == "completed" and job.get("conclusion") in FAILED for job in jobs):
+        return True
+    return parsed(api(f"repos/{repo}/actions/runs/{run_id}"), "run")["status"] == "completed"
+
+
 def excerpt(text, limit):
     lines = text.splitlines()
     selected = set()
@@ -103,19 +126,38 @@ def excerpt(text, limit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read completed failed-job logs, including during an active run.")
-    parser.add_argument("run_id", type=positive)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("run_id", type=positive, nargs="?")
+    target.add_argument("--pr", type=positive, help="read the CI run of this pull request's head commit")
+    parser.add_argument("--wait", action="store_true", help="first wait until a job fails or the run completes")
     parser.add_argument("--repo", type=repository, help="OWNER/REPO; defaults to gh's current repository or GH_REPO")
     parser.add_argument("--output-dir", type=Path, help="directory for full sanitized logs; defaults to a new temporary directory")
     parser.add_argument("--max-lines", type=positive, default=60, help="total excerpt lines across jobs (default: 60)")
     args = parser.parse_args(argv)
     repo = args.repo or "{owner}/{repo}"
     try:
-        jobs = jobs_from_pages(api(f"repos/{repo}/actions/runs/{args.run_id}/jobs?filter=latest&per_page=100", paginate=True))
+        deadline = time.monotonic() + PATIENCE
+        while args.run_id is None:
+            args.run_id = run_of_pull(repo, args.pr)
+            if args.run_id is None:
+                if not args.wait or time.monotonic() > deadline:
+                    raise RuntimeError(f"No CI run for pull request {args.pr}'s head commit yet")
+                time.sleep(POLL)
+        while True:
+            jobs = jobs_from_pages(api(f"repos/{repo}/actions/runs/{args.run_id}/jobs?filter=latest&per_page=100", paginate=True))
+            if not args.wait or settled(repo, args.run_id, jobs):
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"Run {args.run_id} neither failed nor completed within {PATIENCE // 60} minutes")
+            time.sleep(POLL)
         failed = [job for job in jobs if job["status"] == "completed" and job.get("conclusion") in FAILED]
         unfinished = sum(job["status"] != "completed" for job in jobs)
         print(f"Run {args.run_id}: {len(failed)} completed failed/cancelled jobs; {unfinished} unfinished jobs.")
         if not failed:
-            print("No failed-job logs to retrieve; this does not establish that the run passed or started.")
+            if args.wait and not unfinished:
+                print("The run completed with no failed or cancelled job.")
+            else:
+                print("No failed-job logs to retrieve; this does not establish that the run passed or started.")
             return 0
         directory = args.output_dir or Path(tempfile.mkdtemp(prefix=f"ci-failed-{args.run_id}-"))
         directory.mkdir(parents=True, exist_ok=True)

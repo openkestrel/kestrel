@@ -1,11 +1,15 @@
 # Reading a failed CI job
 
-Find the run ID in `gh pr checks` or `gh run list`. When a completed job has failed while other
-jobs are still running, read that job without waiting for the whole-run log command:
+After pushing, run this in the background; it finds the CI run of the pull request's head commit,
+waits until a job fails or the run completes, then prints the failed jobs' logs:
 
 ```sh
-mise exec -- python3 scripts/ci-failed-logs.py RUN_ID --repo openkestrel/kestrel
+mise exec -- python3 scripts/ci-failed-logs.py --pr NUMBER --wait --repo openkestrel/kestrel
 ```
+
+It waits at most two hours, polling every 30 seconds, and stops at the first failed job rather
+than the whole run. Without `--wait` it reads what has failed so far and returns. A run ID in
+place of `--pr` reads that run, such as a `flakes.yml` stress run.
 
 The helper uses the installed `gh` authentication and read-only API requests. It follows the
 [job-log download](https://docs.github.com/en/rest/actions/workflow-jobs#download-job-logs-for-a-workflow-run)

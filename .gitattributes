@@ -7,7 +7,8 @@ crates/kestrel-operator-types/src/generated.rs linguist-generated=true
 docs/measurements/** linguist-generated=true
 
 # Over the token budget from before it existed; each value is the issue that splits the file.
-# Blank lines keep parallel PRs that delete neighbouring entries from conflicting.
+# Blank lines keep parallel PRs that delete neighbouring entries from conflicting, so deleting an
+# entry leaves the blank lines around it, doubled.
 
 /GLOSSARY.md token-budget-exempt=816
 
