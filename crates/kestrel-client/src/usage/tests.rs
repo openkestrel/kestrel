@@ -1,4 +1,4 @@
-use clap::{CommandFactory as _, Parser as _};
+use clap::Parser as _;
 
 use super::*;
 

@@ -10,6 +10,7 @@ mod capacity;
 mod changes;
 mod cli;
 mod clock;
+mod completions;
 mod continuity;
 mod credential;
 mod debuginfo;

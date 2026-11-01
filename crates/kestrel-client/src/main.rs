@@ -1,6 +1,7 @@
 mod api;
 mod changes;
 mod command;
+mod completion;
 mod diagnostic;
 mod exit;
 mod files;
@@ -89,8 +90,15 @@ struct Client {
     jq: Option<String>,
 }
 
+fn main() -> ExitCode {
+    if completion::dispatch() {
+        return ExitCode::SUCCESS;
+    }
+    normal()
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+async fn normal() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some((value, corrected)) = json_value(&args) {
         let invocation = Invocation {
@@ -158,6 +166,9 @@ async fn run(
     matches: &clap::ArgMatches,
     invocation: &Invocation,
 ) -> Result<()> {
+    if let Some(Command::Completions { shell }) = client.command {
+        return completion::install(shell);
+    }
     let json = invocation.json;
     let presentation = Presentation::chosen(json, filter);
 
@@ -244,6 +255,7 @@ async fn run(
                 .await?;
             queue::show(&presentation, &snapshot, invocation)
         }
+        Command::Completions { .. } => unreachable!("completion installation runs locally"),
         Command::ExitCodes => unreachable!("the catalog is shown before the control plane is"),
     }
 }

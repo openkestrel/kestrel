@@ -101,6 +101,11 @@ pub(crate) enum Command {
     Status,
     /// Print every exit code, what it means, and when a script should branch on it
     ExitCodes,
+    /// Generate shell integration for dynamic completion of commands, flags and scoped names
+    Completions {
+        #[arg(value_enum)]
+        shell: crate::completion::Shell,
+    },
 }
 
 impl Command {
@@ -121,7 +126,10 @@ impl Command {
             | Command::Instance(_)
             | Command::Queue
             | Command::Status => true,
-            Command::Operator(_) | Command::Organization(_) | Command::ExitCodes => false,
+            Command::Operator(_)
+            | Command::Organization(_)
+            | Command::ExitCodes
+            | Command::Completions { .. } => false,
             Command::Event(event) => match event {
                 EventCommand::List { .. } => true,
                 EventCommand::Show { .. } => false,

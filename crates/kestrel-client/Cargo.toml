@@ -28,6 +28,8 @@ terminal_size = "0.4.4"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 uuid = { version = "1", features = ["serde"] }
 yaml_serde = "0.10"
+# Pinned because generated shell integration uses an unstable engine protocol.
+clap_complete = { version = "=4.6.11", features = ["unstable-dynamic"] }
 
 [[bin]]
 name = "kestrel"
