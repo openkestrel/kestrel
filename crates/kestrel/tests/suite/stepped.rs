@@ -438,6 +438,31 @@ async fn a_session_claimed_in_the_pass_that_archives_its_workspaces_instance_sta
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_supervisor_that_exits_during_startup_keeps_its_sessions_supervisor() {
+    let environment = Environment::executing("exit 3");
+    let kestrel = Kestrel::stepped_dispatching_to(environment.path(), "unused").await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let checkpoint = kestrel.pause_supervisor_startup().await;
+
+    kestrel.go_live().await;
+    tokio::time::timeout(PATIENCE, checkpoint.reached())
+        .await
+        .expect("the supervisor should reach the startup checkpoint");
+    let ended = until_state(&kestrel, &session, SessionState::Ended).await;
+    assert!(
+        matches!(&ended.exit, Some(Exit::Failed { because }) if because.contains("without reporting how the session went")),
+        "{ended:?}"
+    );
+    let supervisor = ended.supervisor.as_deref().expect("a supervisor");
+    Environment::named(supervisor).is_gone().await;
+    drop(checkpoint);
+
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_session_stopped_before_the_pass_that_finds_its_supervisor_gone_stays_stopped() {
     let kestrel = dispatching().await;
     let stopped = a_workspace(&kestrel).await;

@@ -948,6 +948,13 @@ impl Kestrel {
         }
     }
 
+    pub async fn pause_supervisor_startup(&self) -> kestrel::role::work::StartupCheckpoint {
+        match &*self.work.lock().await {
+            WorkRole::Stepped(work) => work.pause_supervisor_startup(),
+            _ => panic!("a startup checkpoint must be set before the work role goes live"),
+        }
+    }
+
     /// Time the control plane was present for: a work pass at least every `GAP` of it, so the
     /// lease sweep never reads it as time it was away (ADR-0059).
     pub async fn advance(&self, by: Duration) {

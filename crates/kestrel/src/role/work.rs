@@ -24,6 +24,9 @@ use crate::timer;
 use crate::work;
 use crate::workspace;
 
+mod startup;
+pub use startup::StartupCheckpoint;
+
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
 /// `Store` again rather than by being told.
 const POLL: Duration = Duration::from_millis(100);
@@ -86,13 +89,38 @@ enum Held {
 /// The supervisors this process started, by Instance. A restart starts with none held, and finds
 /// the ones still running by what they last reported.
 #[derive(Clone, Default)]
-struct Supervisors(Arc<Mutex<HashMap<String, Supervisor>>>);
+struct Supervisors {
+    held: Arc<Mutex<HashMap<String, Supervisor>>>,
+    startup: Arc<Mutex<Option<startup::Pause>>>,
+}
 
 impl Supervisors {
     fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, Supervisor>> {
-        self.0
+        self.held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn pause_startup(&self) -> StartupCheckpoint {
+        let checkpoint = StartupCheckpoint::new();
+        let mut startup = self
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(startup.is_none(), "a supervisor startup is already paused");
+        *startup = Some(checkpoint.pause());
+        checkpoint
+    }
+
+    async fn startup_checkpoint(&self) {
+        let pause = self
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(pause) = pause {
+            pause.wait().await;
+        }
     }
 
     fn held_on(&self, instance: &str) -> Held {
@@ -165,6 +193,10 @@ pub async fn run(
 }
 
 impl Work {
+    pub fn pause_supervisor_startup(&self) -> StartupCheckpoint {
+        self.dispatcher.supervisors.pause_startup()
+    }
+
     pub async fn start(
         store: Store,
         dispatch: Option<Dispatch>,
@@ -489,28 +521,25 @@ async fn execute(
         }
     };
 
-    let supervisor = match supervised(
+    if let Err(error) = supervised(
         store,
         dispatch,
         supervisors,
+        session,
         &workspace,
         &mut instance,
         started.seq - 1,
     )
     .await
     {
-        Ok(supervisor) => supervisor,
-        Err(error) => {
-            work::fail(
-                store,
-                session,
-                &format!("the supervisor could not be started on the instance {name}: {error:#}"),
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-    work::supervised(store, session, &name, supervisor.as_deref()).await?;
+        work::fail(
+            store,
+            session,
+            &format!("the supervisor could not be started on the instance {name}: {error:#}"),
+        )
+        .await?;
+        return Ok(());
+    }
     info!(session = %session.id, instance = name, "a session was started on its instance's supervisor");
 
     Ok(())
@@ -522,21 +551,22 @@ async fn supervised(
     store: &Store,
     dispatch: &Dispatch,
     supervisors: &Supervisors,
+    session: &Session,
     workspace: &Workspace,
     instance: &mut Instance,
     after: i64,
-) -> Result<Option<String>> {
+) -> Result<()> {
     let name = instance.name().to_owned();
     let held = supervisors.held_on(&name);
     if let Held::Running(running) = held {
-        return Ok(Some(running));
+        return work::supervised(store, session, &name, Some(&running)).await;
     }
     let recorded = store.read().await?.workspaces().supervisor(&name).await?;
     if let Some(recorded) = recorded {
         if matches!(held, Held::Nothing)
             && link::on_the_link(recorded.reached_at, store.clock().now())
         {
-            return Ok(recorded.name);
+            return work::supervised(store, session, &name, recorded.name.as_deref()).await;
         }
         if let Some(supervisor) = &recorded.name {
             dispatch.driver.stop_named(supervisor).with_context(|| {
@@ -576,6 +606,9 @@ async fn supervised(
     tx.workspaces()
         .name_supervisor(&name, &credential.digest(), supervisor.name())
         .await?;
+    tx.workspaces()
+        .record_supervisor(session, &name, Some(supervisor.name()))
+        .await?;
     tx.commit().await?;
     info!(
         instance = name,
@@ -589,10 +622,11 @@ async fn supervised(
     if let Some(err) = supervisor.take_stderr() {
         relay(&name, err);
     }
-    let started = supervisor.name().to_owned();
+    // The exit watcher must not see a supervisor before its Session records it.
     supervisors.held().insert(name, supervisor);
+    supervisors.startup_checkpoint().await;
 
-    Ok(Some(started))
+    Ok(())
 }
 
 /// The Workspace's own Instance, or a fresh one for a Workspace that has none. `None` once the
