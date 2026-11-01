@@ -115,7 +115,7 @@ async fn started(api: &ControlPlane, organization: &str, connect: &Connect) -> R
         .await?;
     reach::shown(
         &started.url,
-        &reach::reach(&Surroundings::read(), &Url::parse(&started.url)?),
+        &reach::reach(&Surroundings::read(), &Url::parse(&started.url)?, None),
         std::io::stderr().is_terminal(),
     );
     Ok(started.flow)

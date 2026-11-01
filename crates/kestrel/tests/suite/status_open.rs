@@ -19,6 +19,24 @@ async fn status_leads_with_the_configured_client_and_counts_empty_scoped_work() 
     let terminal = ran_on_a_terminal_by(&kestrel, &args, Invocation::default().given(""), "").await;
     assert_eq!(terminal.status.code(), Some(78));
     assert!(terminal.said.contains("http://localhost:7800"));
+    for state in [
+        "queued",
+        "working",
+        "trailing",
+        "waiting",
+        "unbriefed",
+        "ended",
+        "unreachable",
+    ] {
+        let label = format!("Sessions {state}");
+        let line = terminal
+            .said
+            .lines()
+            .find(|line| line.contains(&label))
+            .expect("every Session state is visible");
+        assert!(line.ends_with('0'), "{line}");
+    }
+
     let read = ran_by(
         &kestrel,
         &["status", "--organization", "acme", "--json"],

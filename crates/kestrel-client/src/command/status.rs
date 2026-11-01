@@ -45,6 +45,7 @@ pub(crate) async fn show(
     invocation: &Invocation,
 ) -> Result<()> {
     let (read, source) = readiness::read(api, scoping).await?;
+    let source = source.map(|source| source.to_string());
     let organization = read.organization.as_deref();
     let Some(organization) = organization else {
         let status = Status {

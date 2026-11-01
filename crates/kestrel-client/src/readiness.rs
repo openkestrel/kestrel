@@ -8,7 +8,7 @@ use crate::api::ControlPlane;
 use crate::diagnostic::{self, Invocation};
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
-use crate::scope::{self, Derived, Scoping};
+use crate::scope::{self, Derived, Scoping, Source};
 use crate::shell::quoted;
 
 const GREEN: &str = "1;32";
@@ -24,7 +24,7 @@ pub async fn show(
     presentation: &Presentation,
 ) -> Result<()> {
     let (read, source) = read(api, scoping).await?;
-    let named = source.as_deref() == Some("--organization");
+    let named = matches!(source, Some(Source::Flag));
 
     let mut out = std::io::stdout().lock();
     if presentation.json() {
@@ -42,12 +42,9 @@ pub async fn show(
 pub(crate) async fn read(
     api: &ControlPlane,
     scoping: Scoping<'_>,
-) -> Result<(wire::Readiness, Option<String>)> {
+) -> Result<(wire::Readiness, Option<Source>)> {
     let (organization, source) = match scoping.derive().await? {
-        Derived::Scope(scope) => {
-            let source = scope.source.to_string();
-            (Some(scope.organization), Some(source))
-        }
+        Derived::Scope(scope) => (Some(scope.organization), Some(scope.source)),
         Derived::Unnamed { existing } if existing.is_empty() => (None, None),
         Derived::Unnamed { existing } => bail!(scope::several(&existing)),
     };

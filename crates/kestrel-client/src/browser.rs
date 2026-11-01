@@ -46,12 +46,22 @@ pub(crate) enum Reach {
     },
 }
 
-pub(crate) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
+pub(crate) fn reach(surroundings: &Surroundings, client: &Url, operator: Option<&Url>) -> Reach {
     if !surroundings.ssh && surroundings.display {
         return Reach::Here;
     }
     let port = client.port_or_known_default().unwrap_or(80);
     let host = client.host_str().unwrap_or("localhost");
+    let mut forwards = format!("-L {port}:{host}:{port}");
+    if let Some(operator) = operator {
+        if let (Some(host), Some(operator_port)) =
+            (operator.host_str(), operator.port_or_known_default())
+        {
+            if operator_port != port {
+                forwards.push_str(&format!(" -L {operator_port}:{host}:{operator_port}"));
+            }
+        }
+    }
     let (destination, known) = match (&surroundings.server, &surroundings.user) {
         (Some((address, port)), user) if surroundings.ssh => {
             let user = user
@@ -73,7 +83,7 @@ pub(crate) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
     };
     Reach::Tunnel {
         known,
-        command: format!("ssh -N -L {port}:{host}:{port} {destination}"),
+        command: format!("ssh -N {forwards} {destination}"),
     }
 }
 
@@ -123,14 +133,8 @@ pub(crate) fn opened(url: &str) {
         .spawn();
 }
 
-pub(crate) fn access(reach: Reach, operator: &Url) {
-    if let Reach::Tunnel { mut command, known } = reach {
-        if let (Some(host), Some(port)) = (operator.host_str(), operator.port_or_known_default()) {
-            let forward = format!("-L {port}:{host}:{port}");
-            if !command.contains(&format!("-L {port}:")) {
-                command = command.replacen("ssh -N", &format!("ssh -N {forward}"), 1);
-            }
-        }
+pub(crate) fn access(reach: Reach) {
+    if let Reach::Tunnel { command, known } = reach {
         if known {
             eprintln!("From your laptop, forward the Client and operator ports:");
         } else {

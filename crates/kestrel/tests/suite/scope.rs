@@ -239,8 +239,8 @@ async fn status_prints_every_resolved_value_its_source_and_what_exists() {
         &["status", "--organization", "acme", "--json"],
         Invocation::default(),
     )
-    .await
-    .records();
+    .await;
+    let reported = blocked_status(&reported);
 
     assert_eq!(reported.len(), 1);
     assert_eq!(reported[0]["control_plane"], kestrel.operator());
@@ -269,12 +269,10 @@ async fn status_names_the_environment_and_the_binding_when_each_is_the_source() 
         sourced,
         Invocation::default().env("KESTREL_ORGANIZATION", "acme"),
     )
-    .await
-    .records();
-    let binding = ran_by(&kestrel, sourced, bound_to("acme")).await.records();
-    let only = ran_by(&kestrel, sourced, Invocation::default())
-        .await
-        .records();
+    .await;
+    let environment = blocked_status(&environment);
+    let binding = blocked_status(&ran_by(&kestrel, sourced, bound_to("acme")).await);
+    let only = blocked_status(&ran_by(&kestrel, sourced, Invocation::default()).await);
 
     assert_eq!(
         environment[0]["organization_source"],
@@ -377,7 +375,7 @@ async fn the_client_keeps_no_current_context_and_switches_none() {
 
     assert!(!switched.status.success());
     assert!(!configured.status.success());
-    assert_eq!(status.records()[0]["organization"], "acme");
+    assert_eq!(blocked_status(&status)[0]["organization"], "acme");
     assert_eq!(
         kestrel.organizations().await[0].id,
         acme.id,
@@ -389,4 +387,13 @@ async fn the_client_keeps_no_current_context_and_switches_none() {
         status.left_behind
     );
     kestrel.teardown().await;
+}
+
+fn blocked_status(finished: &crate::support::client::Finished) -> Vec<Value> {
+    assert_eq!(finished.status.code(), Some(78), "{}", finished.err);
+    finished
+        .out
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("a complete status read"))
+        .collect()
 }

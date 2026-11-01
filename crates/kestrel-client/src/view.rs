@@ -523,10 +523,33 @@ pub const RELEASED: Columns<wire::ReleasedInstance> =
 pub const STATUS: Columns<crate::Status> = Columns::Detail(&[
     Column("Client", |record| text(&record.client_url)),
     Column("readiness", |record| text(&record.readiness.outcome)),
-    Column("Workspaces by state", |record| {
-        counts(&record.workspace_counts)
+    Column("Workspaces open", |record| {
+        text(record.workspace_counts["open"])
     }),
-    Column("Sessions by state", |record| counts(&record.session_counts)),
+    Column("Workspaces sealed", |record| {
+        text(record.workspace_counts["sealed"])
+    }),
+    Column("Sessions queued", |record| {
+        text(record.session_counts["queued"])
+    }),
+    Column("Sessions working", |record| {
+        text(record.session_counts["working"])
+    }),
+    Column("Sessions trailing", |record| {
+        text(record.session_counts["trailing"])
+    }),
+    Column("Sessions waiting", |record| {
+        text(record.session_counts["waiting"])
+    }),
+    Column("Sessions unbriefed", |record| {
+        text(record.session_counts["unbriefed"])
+    }),
+    Column("Sessions ended", |record| {
+        text(record.session_counts["ended"])
+    }),
+    Column("Sessions unreachable", |record| {
+        text(record.session_counts["unreachable"])
+    }),
     Column("control plane", |record| {
         text(&record.location.control_plane)
     }),
@@ -642,14 +665,6 @@ fn option_summary(options: &[wire::SessionOption]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
-    counts
-        .iter()
-        .map(|(state, count)| format!("{state}: {count}"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]

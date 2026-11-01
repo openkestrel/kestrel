@@ -93,11 +93,11 @@ pub(crate) async fn run(running: Running<'_>, reference: Option<String>) -> Resu
     writeln!(out, "{}", opened.url)?;
     out.flush()?;
     drop(out);
-    let reach = browser::reach(&Surroundings::read(), &url);
+    let reach = browser::reach(&Surroundings::read(), &url, Some(operator));
     match reach {
         Reach::Here if std::io::stdout().is_terminal() => browser::opened(&opened.url),
         Reach::Here => {}
-        reach => browser::access(reach, operator),
+        reach => browser::access(reach),
     }
     Ok(())
 }
