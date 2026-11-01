@@ -1,5 +1,5 @@
-//! A start's plan, resolved from what a Client gave and what exists. Resolving writes nothing,
-//! asks no provider or GitHub, and holds no secret it could return.
+//! A start's plan, resolved from what a Client gave and what exists without writing or asking
+//! anyone outside Store.
 
 use anyhow::Result;
 use kestrel_operator_types::{SignInFill, SignInMethodOwnership};
@@ -37,10 +37,19 @@ pub struct Request {
     pub clone: Option<LocalClone>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Credential {
     pub variable: String,
     pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("variable", &self.variable)
+            .field("secret", &self.secret.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]

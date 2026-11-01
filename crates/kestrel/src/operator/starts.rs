@@ -193,11 +193,11 @@ fn diagnostic(error: anyhow::Error) -> Result<wire::Diagnostic, Refused> {
 }
 
 fn scalar(valued: Valued<String>) -> wire::StartValue {
-    wire::StartValue {
+    optional(Valued {
         value: Some(valued.value),
-        source: source(valued.source),
+        source: valued.source,
         record: valued.record,
-    }
+    })
 }
 
 fn optional(valued: Valued<Option<String>>) -> wire::StartValue {

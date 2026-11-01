@@ -266,3 +266,24 @@ async fn the_first_committed_start_completes_setup_once_and_it_survives_a_restar
 
     kestrel.teardown().await;
 }
+
+/// An Agent named for the Operator is refused only once the start's declarations are placed.
+#[tokio::test]
+async fn a_start_refused_inside_its_transaction_leaves_none_of_it_behind() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
+    let mut plan = a_start("acme", "opencode", "Fix the flaky test");
+    plan["agent"] = json!("ada");
+    assert_eq!(previewed(&kestrel, &plan).await["outcome"], "ready");
+
+    let (status, refused) = declared(&kestrel, operator::STARTS, &plan).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["field"], "participant", "{refused}");
+    let organizations: Vec<Value> = listed(&kestrel, operator::ORGANIZATIONS).await;
+    assert_eq!(organizations.len(), 1, "{organizations:?}");
+    assert_eq!(organizations[0]["name"], "ada");
+    assert!(!complete(&kestrel).await);
+
+    kestrel.teardown().await;
+}

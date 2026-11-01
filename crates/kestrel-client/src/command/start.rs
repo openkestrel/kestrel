@@ -51,7 +51,7 @@ pub(crate) struct Start {
     /// of this name; repeat for many
     #[arg(long = "credential", value_name = "VARIABLE")]
     credentials: Vec<String>,
-    /// Apply the reviewed plan. Without a terminal nothing is applied without it; it never
+    /// Apply the reviewed plan without asking, which a start with no terminal needs. It never
     /// supplies a missing value
     #[arg(long, short)]
     yes: bool,
@@ -140,10 +140,7 @@ async fn started(
 
     // A refused or lost start is reported, never sent again.
     let started: wire::Started = api
-        .post_as(
-            &["starts"],
-            &start::applied(&preview, &plan, brief, secrets),
-        )
+        .post_as(&["starts"], &start::applied(&preview, brief, secrets))
         .await?;
     for (kind, settled) in [
         ("organization", &started.organization),
@@ -160,8 +157,7 @@ async fn started(
     typed::show(presentation, &view::STARTED, &started)
 }
 
-/// A gap outranks a missing input, which outranks an inspection that failed; each names every
-/// other it found. A gap exits as its kind says: a setup prerequisite 78, a conflict 4.
+/// A gap exits as its kind says (78 for setup, 4 for a conflict) before any missing input does.
 fn ready(
     preview: &wire::StartPreview,
     clone: &start::LocalClone,

@@ -345,7 +345,6 @@ fn applying(preview: &wire::StartPreview) -> Vec<String> {
 /// refuses rather than resolving something else.
 pub fn applied(
     preview: &wire::StartPreview,
-    plan: &wire::StartPlan,
     brief: String,
     secrets: Vec<(String, String)>,
 ) -> wire::StartPlan {
@@ -380,8 +379,8 @@ pub fn applied(
         agent: value(Some(&preview.agent)),
         harness: value(Some(&preview.harness)),
         model: value(Some(&preview.model)),
-        profile: plan.profile.clone(),
-        sign_in_method: plan.sign_in_method.clone(),
+        profile: value(Some(&preview.profile)),
+        sign_in_method: value(Some(&preview.sign_in_method)),
         brief: Some(brief),
         credentials: (!secrets.is_empty()).then(|| {
             secrets
