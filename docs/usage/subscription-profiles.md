@@ -103,7 +103,7 @@ Generic writes store encrypted material, advance its revision and replace obsole
 and model-use evidence with unchecked evidence. They cancel an active relay for the same slot
 and make no provider or model call. `kestrel login` instead chooses the catalogue's destination,
 validates its input and performs supported provider checks without model usage (see
-[saved sign-ins](../architecture/operator-setup.md#saved-sign-ins)). `profile set` is the manual
+[saved sign-ins](../architecture/operator-sign-ins.md#saved-sign-ins)). `profile set` is the manual
 path for material the catalogue does not describe.
 
 `kestrel profile declare NAME` can also declare a Profile without storing material; its omitted

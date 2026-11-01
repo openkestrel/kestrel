@@ -1,8 +1,8 @@
 # Changing an Operator endpoint
 
 The [Operator boundary](operator-boundary.md) owns routing, errors and domain-to-wire mapping;
-[setup](operator-setup.md), [reads and streams](operator-reads.md), and the [Clients](client.md)
-describe the consumers. `openapi/operator.json` is the contract, including operation IDs,
+[setup](operator-setup.md), [sign-ins](operator-sign-ins.md), [reads and streams](operator-reads.md),
+and the [Clients](client.md) describe the consumers. `openapi/operator.json` is the contract, including operation IDs,
 required fields and typed refusals.
 
 ## Where the document lives

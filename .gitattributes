@@ -139,8 +139,6 @@ docs/measurements/** linguist-generated=true
 
 /docs/architecture/link.md token-budget-exempt=840
 
-/docs/architecture/operator-setup.md token-budget-exempt=849
-
 /docs/research/cloud-agent-environments.md token-budget-exempt=808
 
 /docs/research/cloud-agent-guardrails.md token-budget-exempt=792

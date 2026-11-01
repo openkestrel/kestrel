@@ -24,7 +24,8 @@ has not caught up to. Read the map, then the page in `docs/architecture/` for wh
 - Events, matching, follow-ups, posts: `triggers.md`
 - the schema or a query: `data-model.md`
 - any operator endpoint, its errors or a declaration: `operator-boundary.md`
-- the Operator, readiness, sign-ins, the harness catalogue: `operator-setup.md`
+- the Operator, readiness, the harness catalogue: `operator-setup.md`
+- a saved sign-in, the method a Session used, sign-in tests and relays: `operator-sign-ins.md`
 - a Session or Workspace read, a stream, live work: `operator-reads.md`
 - a `kestrel` command or the browser Client: `client.md`
 - transactions, errors, tests, in every change: `conventions.md`
