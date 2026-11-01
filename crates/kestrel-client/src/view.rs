@@ -51,8 +51,15 @@ pub const PROFILES: Columns<wire::SubscriptionProfileListed> = Columns::Rows(&[
 ]);
 pub const LOGIN: Columns<wire::SubscriptionProfileLogin> =
     Columns::Value(Column("name", |login| text(&login.name)));
-pub const GITHUB_APP_STARTED: Columns<wire::GithubAppStarted> =
-    Columns::Value(Column("url", |started| text(&started.url)));
+pub const GITHUB_CONNECTED: Columns<wire::GithubAppFlow> =
+    Columns::Value(Column("connected", |flow| {
+        format!(
+            "GitHub connected · Integration {} · Organization {} · repository {}",
+            flow.name,
+            flow.organization,
+            or_absent(flow.repository.as_ref())
+        )
+    }));
 pub const INTEGRATION_WEBHOOK: Columns<wire::IntegrationWebhook> = Columns::Detail(&[
     Column("configured URL", |hook| text(&hook.url)),
     Column("unfinished URL update", |hook| {

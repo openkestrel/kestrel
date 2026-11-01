@@ -2075,7 +2075,7 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
         (
             "integration",
             "Integrations",
-            "integration github register --help",
+            "integration github connect --help",
         ),
         ("event", "Events", "integration list"),
         ("trigger", "Triggers", "trigger declare --help"),

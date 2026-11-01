@@ -69,6 +69,16 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   `test_providers` locally, says it spends model usage, posts once and reads the known test until
   it ends; only `worked` reaches stdout, and any other end is a typed Diagnostic (exit 4, or 5 for
   `unavailable`, `harness_failed` and an interrupted test).
+- **GitHub connection** (`command/integration/github/connect.rs`, `reach.rs`): `kestrel
+  integration github connect` starts the manifest flow with the readiness read's `client_url` as
+  its callback base, prints the setup URL on its own stderr line and opens it only when stderr is
+  a terminal with a display. Over SSH, or with no display, it prints an `ssh -N -L` tunnel to the
+  Client port, naming `$USER@` and `SSH_CONNECTION`'s server address and non-22 port when known
+  and an explicit `<ssh-destination>` template otherwise; it never guesses an alias. It then polls
+  `GET …/github-app/flows/{flow}`, never the Integration list, finishing with `--repository` once
+  the App is installed or leaving the choice to the browser. Cancellation, expiry and failed
+  conversion end in a typed Diagnostic built from the flow (exit 4); Ctrl-C only stops waiting, and
+  `--resume FLOW` waits on the same flow. Existing Apps use `github register`.
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
   answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for

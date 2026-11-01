@@ -7,10 +7,10 @@ A GitHub integration records repository events and can post results back to an i
 Create the App through Kestrel:
 
 ```sh
-kestrel integration create-github-app origin --app-organization openkestrel
+kestrel integration github connect origin --app-organization openkestrel --repository openkestrel/kestrel
 ```
 
-Follow the printed URL to create and install the App, then explicitly select one accessible repository to register its Integration. See [Create the GitHub App](../../USAGE.md#create-the-github-app) for localhost callbacks and optional public webhooks. Kestrel polls the App's log of webhook deliveries every minute, so it learns everything a webhook would — issue events, comments and pull requests — about one interval later, and back as far as GitHub keeps deliveries (three days). A webhook base that GitHub can reach only makes it faster. The first poll starts from when the Integration was registered instead of replaying earlier deliveries. Existing Apps can still be registered with `kestrel integration github register` and their App ID, installation ID, and private key.
+Follow the printed URL to create and install the App; the command connects the repository once it is installed, or lets you choose one in the browser without `--repository`. See [Create the GitHub App](../../USAGE.md#create-the-github-app) for SSH tunnels, resuming and optional public webhooks. Kestrel polls the App's log of webhook deliveries every minute, so it learns everything a webhook would — issue events, comments and pull requests — about one interval later, and back as far as GitHub keeps deliveries (three days). A webhook base that GitHub can reach only makes it faster. The first poll starts from when the Integration was registered instead of replaying earlier deliveries. Existing Apps can still be registered with `kestrel integration github register` and their App ID, installation ID, and private key.
 
 Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is registered and never takes what that identity said — kestrel's comments and its agents' alike — as input or as a command, whatever a trigger's filter admits.
 

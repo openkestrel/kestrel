@@ -235,7 +235,7 @@ impl Client {
         }
     }
 
-    fn err_so_far(&self) -> String {
+    pub fn err_so_far(&self) -> String {
         String::from_utf8_lossy(&self.said.lock().unwrap_or_else(PoisonError::into_inner))
             .into_owned()
     }
@@ -251,6 +251,14 @@ impl Client {
             );
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// What Ctrl-C at its terminal sends it.
+    pub fn interrupt(&self) {
+        let pid = libc::pid_t::try_from(self.child.id()).expect("a process id");
+        #[allow(unsafe_code)]
+        let signalled = unsafe { libc::kill(pid, libc::SIGINT) };
+        assert_eq!(signalled, 0, "the client should take the interrupt");
     }
 
     pub fn finish(&mut self) -> Finished {

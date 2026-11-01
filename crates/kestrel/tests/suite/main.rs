@@ -20,6 +20,7 @@ mod exit_codes;
 mod failure_evidence;
 mod follow_up;
 mod forgery;
+mod github_connect_cli;
 mod github_manifest;
 mod give_up;
 mod handoff;

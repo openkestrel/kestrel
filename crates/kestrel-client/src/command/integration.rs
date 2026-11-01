@@ -15,21 +15,6 @@ use crate::{typed, view};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum IntegrationCommand {
-    /// Create a GitHub App and register its repository Integration through the browser
-    CreateGithubApp {
-        name: String,
-        /// Create the private App under this GitHub organization instead of your personal account
-        #[arg(long)]
-        app_organization: Option<String>,
-        /// Browser-reachable loopback origin (defaults to the control-plane URL)
-        #[arg(long)]
-        callback_base: Option<String>,
-        /// Public HTTPS origin of the webhook listener; omit to use the deployment setting
-        #[arg(long)]
-        webhook_base: Option<String>,
-        #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
-        api: Option<String>,
-    },
     /// GitHub Integrations
     #[command(subcommand)]
     Github(GithubCommand),
@@ -113,30 +98,6 @@ pub(crate) async fn run(running: Running<'_>, command: IntegrationCommand) -> Re
         url,
     } = running;
     match command {
-        IntegrationCommand::CreateGithubApp {
-            name,
-            app_organization,
-            callback_base,
-            webhook_base,
-            api: github_api,
-        } => {
-            let organization = scoping.resolve().await?.organization;
-            let started: wire::GithubAppStarted = api
-                .post_as(
-                    &["organizations", &organization, "github-app"],
-                    &wire::GithubAppStart {
-                        name,
-                        callback_base: callback_base.unwrap_or_else(|| url.to_string()),
-                        webhook_base: webhook_base.map(Some),
-                        api: github_api
-                            .map(|api| serde_json::from_value(json!(api)))
-                            .transpose()?,
-                        app_organization: app_organization.map(Some),
-                    },
-                )
-                .await?;
-            typed::show(presentation, &view::GITHUB_APP_STARTED, &started)?;
-        }
         IntegrationCommand::Github(command) => {
             let running = Running {
                 api,
@@ -322,7 +283,7 @@ pub(crate) async fn run(running: Running<'_>, command: IntegrationCommand) -> Re
                     control_plane,
                     "Integrations",
                     Some(&organization),
-                    "integration github register --help",
+                    "integration github connect --help",
                 ),
             )?;
         }
