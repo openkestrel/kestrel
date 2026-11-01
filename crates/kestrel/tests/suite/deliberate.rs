@@ -2,8 +2,6 @@
 
 use crate::support;
 
-use std::time::Duration;
-
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Schedule, TriggerState, Workspace, WorkspaceId};
 use kestrel::log::Entry;
@@ -16,7 +14,6 @@ const DOGFOOD: &str = include_str!("../../../../.kestrel/triggers.yaml");
 const REPOSITORY: &str = "openkestrel/kestrel";
 const MAINTAINER: &str = "jtmthf";
 const KESTREL: &str = "kestrel";
-const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn dogfooding(kestrel: &Kestrel, stub: &GithubStub) {
     dogfood_declarations(kestrel).await;
@@ -57,19 +54,35 @@ async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
         .await;
 }
 
-async fn workspaces(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    loop {
-        let workspaces = kestrel.workspaces("acme").await;
-        if workspaces.len() >= count {
-            return workspaces;
+/// More than a stub's scripted events take to be polled and fired, a pass at a time.
+const PASSES: usize = 20;
+
+async fn passed_until<T>(kestrel: &Kestrel, failure: &str, done: impl AsyncFn() -> Option<T>) -> T {
+    for _ in 0..PASSES {
+        kestrel.advance(POLL.unsigned_abs()).await;
+        if let Some(done) = done().await {
+            return done;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "{count} workspaces never opened"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    panic!("{failure} in {PASSES} passes");
+}
+
+async fn settled(kestrel: &Kestrel) {
+    for _ in 0..PASSES {
+        kestrel.advance(POLL.unsigned_abs()).await;
+    }
+}
+
+async fn passed_until_opened(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
+    passed_until(
+        kestrel,
+        &format!("{count} workspaces never opened"),
+        async || {
+            let workspaces = kestrel.workspaces("acme").await;
+            (workspaces.len() >= count).then_some(workspaces)
+        },
+    )
+    .await
 }
 
 async fn brief(kestrel: &Kestrel, workspace: WorkspaceId) -> String {
@@ -119,10 +132,10 @@ async fn neither_labels_nor_assignment_start_work() {
     ));
     stub.deliver(github_stub::assigned(45, KESTREL, MAINTAINER));
     stub.deliver(github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel"));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
-    let opened = workspaces(&kestrel, 1).await;
+    let opened = passed_until_opened(&kestrel, 1).await;
 
     assert_eq!(opened.len(), 1);
     assert_eq!(
@@ -160,10 +173,10 @@ async fn the_maintainers_mention_starts_work_with_the_instruction_and_agent_it_n
         MAINTAINER,
         "@kestrel agent=codex $tdd the parser",
     ));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
-    let opened = workspaces(&kestrel, 1).await.remove(0);
+    let opened = passed_until_opened(&kestrel, 1).await.remove(0);
 
     assert_eq!(kestrel.sessions(opened.id).await[0].agent.name, "codex");
     assert!(
@@ -209,10 +222,10 @@ async fn ordinary_comments_strangers_and_kestrel_itself_command_nothing() {
         "@kestrel-bot can you look?",
     ));
     stub.deliver(github_stub::issue_comment(26, 55, MAINTAINER, "@kestrel"));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
-    let opened = workspaces(&kestrel, 1).await;
+    let opened = passed_until_opened(&kestrel, 1).await;
 
     assert_eq!(opened.len(), 1);
     assert!(
@@ -250,11 +263,10 @@ async fn repeated_signals_for_one_issue_open_one_workspace() {
         MAINTAINER,
         "@kestrel /implement",
     ));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let outcomes = loop {
+    let outcomes = passed_until(&kestrel, "not every signal fired", async || {
         let events = kestrel.events("acme").await;
         let mut outcomes = Vec::new();
         for event in &events {
@@ -266,15 +278,9 @@ async fn repeated_signals_for_one_issue_open_one_workspace() {
                     .map(|firing| firing.outcome),
             );
         }
-        if events.len() == 3 && outcomes.len() == 3 {
-            break outcomes;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "not every signal fired"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+        (events.len() == 3 && outcomes.len() == 3).then_some(outcomes)
+    })
+    .await;
 
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     assert_eq!(
@@ -293,9 +299,9 @@ async fn repeated_signals_for_one_issue_open_one_workspace() {
 async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel"));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
-    let workspace = workspaces(&kestrel, 1).await.remove(0);
+    let workspace = passed_until_opened(&kestrel, 1).await.remove(0);
     let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
 
@@ -312,8 +318,7 @@ async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
         "and a test, please",
     ));
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let heard = loop {
+    let heard = passed_until(&kestrel, "the comments were never heard", async || {
         let heard = said(&kestrel, workspace.id).await;
         let commanded = heard
             .iter()
@@ -321,18 +326,12 @@ async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
         let remarked = heard
             .iter()
             .any(|(by, message)| by == MAINTAINER && message == "and a test, please");
-        if commanded && remarked {
-            break heard;
-        }
         if let Some(claimed) = kestrel.claim_session().await {
             kestrel.complete_session(&claimed).await;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the comments were never heard: {heard:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+        (commanded && remarked).then_some(heard)
+    })
+    .await;
 
     assert!(
         !heard
@@ -355,9 +354,9 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
         "before the first command",
     ));
     stub.deliver(github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel"));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
-    let sealed = workspaces(&kestrel, 1).await.remove(0);
+    let sealed = passed_until_opened(&kestrel, 1).await.remove(0);
     let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
@@ -374,7 +373,7 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
         MAINTAINER,
         "@kestrel /again",
     ));
-    let opened = workspaces(&kestrel, 2).await;
+    let opened = passed_until_opened(&kestrel, 2).await;
 
     assert_eq!(opened.len(), 2);
     let continuation = opened
@@ -395,21 +394,14 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
         "now please add a test",
     ));
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let heard = loop {
+    let heard = passed_until(&kestrel, "the newer remark was never heard", async || {
         let heard = said(&kestrel, continuation.id).await;
-        if heard
+        heard
             .iter()
             .any(|(_, message)| message == "now please add a test")
-        {
-            break heard;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the newer remark was never heard: {heard:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+            .then_some(heard)
+    })
+    .await;
     assert_eq!(
         heard,
         vec![(MAINTAINER.to_owned(), "now please add a test".to_owned())]
@@ -427,7 +419,7 @@ async fn a_dispatch_starts_the_work_it_asks_for_on_the_issue_it_names() {
         "/issues/60",
         github_stub::issue(60, &["agent:claude"]),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let fired = kestrel
@@ -462,7 +454,7 @@ async fn a_dispatch_starts_the_work_it_asks_for_on_the_issue_it_names() {
 async fn a_dispatch_fires_only_the_trigger_it_names() {
     let stub = GithubStub::start();
     stub.script_answer("GET", "/issues/60", github_stub::issue(60, &[]));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
     kestrel
         .declare_trigger(
@@ -480,7 +472,7 @@ async fn a_dispatch_fires_only_the_trigger_it_names() {
         .expect("the dispatch should fire");
     stub.deliver(github_stub::labelled(61, "bug"));
 
-    let opened = workspaces(&kestrel, 2).await;
+    let opened = passed_until_opened(&kestrel, 2).await;
     assert_eq!(opened.len(), 2);
     let dispatched = kestrel
         .events("acme")
@@ -499,7 +491,7 @@ async fn a_dispatch_fires_only_the_trigger_it_names() {
 async fn a_dispatch_asking_for_an_agent_the_trigger_does_not_allow_starts_nothing() {
     let stub = GithubStub::start();
     stub.script_answer("GET", "/issues/60", github_stub::issue(60, &[]));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let organization = kestrel.declare_organization("acme").await;
     kestrel
         .declare_agent(&organization, "stranger", "opencode", None)
@@ -539,7 +531,7 @@ async fn a_dispatch_test_renders_what_the_dispatch_then_starts_and_records_nothi
         "/issues/60",
         github_stub::issue(60, &["agent:claude"]),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
     let asked = Asked {
         instruction: Some("/tdd the parser"),
@@ -588,7 +580,7 @@ async fn a_dispatch_test_renders_what_the_dispatch_then_starts_and_records_nothi
 async fn a_dispatch_test_refuses_what_the_dispatch_refuses() {
     let stub = GithubStub::start();
     stub.script_answer("GET", "/issues/60", github_stub::issue(60, &[]));
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     let organization = kestrel.declare_organization("acme").await;
     kestrel
         .declare_agent(&organization, "stranger", "opencode", None)
@@ -672,7 +664,7 @@ async fn a_command_works_ahead_of_a_blocker_on_an_unassigned_issue_and_says_so()
         ),
     );
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let firing = command_firing(&kestrel).await;
@@ -710,21 +702,17 @@ fn unassigned(stub: &GithubStub, issue: i64) {
 }
 
 async fn command_firing(kestrel: &Kestrel) -> kestrel::domain::Firing {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    loop {
+    passed_until(kestrel, "the command did not fire", async || {
         for event in kestrel.events("acme").await {
             if event.occurrence.subject.as_deref() == Some("#43")
                 && let Some(firing) = kestrel.firings(event.record_id).await.into_iter().next()
             {
-                return firing;
+                return Some(firing);
             }
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the command did not fire"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+        None
+    })
+    .await
 }
 
 fn script_command(stub: &GithubStub) {
@@ -747,7 +735,7 @@ async fn a_closed_issue_holds_a_stale_command() {
             .to_string(),
         ),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let firing = command_firing(&kestrel).await;
@@ -773,7 +761,7 @@ async fn an_issue_with_unknown_state_holds_the_start() {
             .to_string(),
         ),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let firing = command_firing(&kestrel).await;
@@ -797,7 +785,7 @@ async fn an_edited_command_without_a_current_assignment_cancels_the_start() {
                 .to_string(),
         ),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let firing = command_firing(&kestrel).await;
@@ -822,7 +810,7 @@ async fn a_failed_dependency_query_holds_the_start() {
         "/issues/43/dependencies/blocked_by",
         github_stub::ScriptedResponse::answering(503),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let firing = command_firing(&kestrel).await;
@@ -851,10 +839,10 @@ async fn a_closed_native_dependency_does_not_hold_the_start() {
             "html_url": issue_link(42),
         })]),
     );
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
-    let opened = workspaces(&kestrel, 1).await;
+    let opened = passed_until_opened(&kestrel, 1).await;
     assert_eq!(opened.len(), 1);
     assert_eq!(command_firing(&kestrel).await.outcome, "opened");
 
@@ -909,20 +897,6 @@ fn unblocked(stub: &GithubStub, issue: i64) {
     );
 }
 
-async fn firing_of(kestrel: &Kestrel, r#type: &str, outcome: &str) -> kestrel::domain::Firing {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    loop {
-        if let Some(firing) = fired(kestrel, r#type, outcome).await {
-            return firing;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no {type} event was {outcome}"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
 async fn fired(kestrel: &Kestrel, r#type: &str, outcome: &str) -> Option<kestrel::domain::Firing> {
     for event in kestrel.events("acme").await {
         if event.occurrence.r#type == r#type
@@ -938,28 +912,17 @@ async fn fired(kestrel: &Kestrel, r#type: &str, outcome: &str) -> Option<kestrel
     None
 }
 
-/// More than a stub's scripted events take to be polled and fired, a pass at a time.
-const PASSES: usize = 20;
-
-async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
-    for _ in 0..PASSES {
-        kestrel.advance(POLL.unsigned_abs()).await;
-        if fired(kestrel, r#type, outcome).await.is_some() {
-            return;
-        }
-    }
-    panic!("no {type} event was {outcome} in {PASSES} passes");
-}
-
-async fn passed_until_opened(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
-    for _ in 0..PASSES {
-        kestrel.advance(POLL.unsigned_abs()).await;
-        let workspaces = kestrel.workspaces("acme").await;
-        if workspaces.len() >= count {
-            return workspaces;
-        }
-    }
-    panic!("{count} workspaces never opened in {PASSES} passes");
+async fn passed_until_fired(
+    kestrel: &Kestrel,
+    r#type: &str,
+    outcome: &str,
+) -> kestrel::domain::Firing {
+    passed_until(
+        kestrel,
+        &format!("no {type} event was {outcome}"),
+        async || fired(kestrel, r#type, outcome).await,
+    )
+    .await
 }
 
 const ASSIGNED: &str = "com.github.issues.assigned";
@@ -969,23 +932,25 @@ async fn a_held_delegation_starts_once_its_blocker_closes() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
 
-    let held = firing_of(&kestrel, ASSIGNED, "held").await;
+    let held = passed_until_fired(&kestrel, ASSIGNED, "held").await;
     assert!(held.failure.unwrap_or_default().contains(&issue_link(42)));
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     unblocked(&stub, 43);
     stub.deliver(github_stub::issue_event(42, "closed", ""));
 
-    let opened = workspaces(&kestrel, 1).await;
+    let opened = passed_until_opened(&kestrel, 1).await;
     assert_eq!(opened.len(), 1);
     assert_eq!(
-        firing_of(&kestrel, ASSIGNED, "opened").await.trigger,
+        passed_until_fired(&kestrel, ASSIGNED, "opened")
+            .await
+            .trigger,
         "assigned"
     );
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    settled(&kestrel).await;
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
 
     kestrel.teardown().await;
@@ -996,30 +961,32 @@ async fn a_held_delegation_waits_on_a_disabled_integration_and_starts_once_it_is
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
-    firing_of(&kestrel, ASSIGNED, "held").await;
+    passed_until_fired(&kestrel, ASSIGNED, "held").await;
 
+    // Maintenance at the instant of a held firing's consideration is not later than it.
+    kestrel.advance(POLL.unsigned_abs()).await;
     kestrel.disable_integration("acme", "github").await;
     unblocked(&stub, 43);
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    while !firing_of(&kestrel, ASSIGNED, "held")
-        .await
-        .failure
-        .unwrap_or_default()
-        .contains("the integration github is disabled")
-    {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the held firing never said its integration is disabled"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    passed_until(
+        &kestrel,
+        "the held firing never said its integration is disabled",
+        async || {
+            fired(&kestrel, ASSIGNED, "held")
+                .await?
+                .failure?
+                .contains("the integration github is disabled")
+                .then_some(())
+        },
+    )
+    .await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
+    kestrel.advance(POLL.unsigned_abs()).await;
     kestrel.enable_integration("acme", "github").await;
 
-    assert_eq!(workspaces(&kestrel, 1).await.len(), 1);
+    assert_eq!(passed_until_opened(&kestrel, 1).await.len(), 1);
 
     kestrel.teardown().await;
 }
@@ -1029,13 +996,13 @@ async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
-    firing_of(&kestrel, ASSIGNED, "held").await;
+    passed_until_fired(&kestrel, ASSIGNED, "held").await;
 
     kestrel.retire_integration("acme", "github").await;
 
-    let canceled = firing_of(&kestrel, ASSIGNED, "canceled").await;
+    let canceled = passed_until_fired(&kestrel, ASSIGNED, "canceled").await;
     assert!(
         canceled
             .failure
@@ -1043,7 +1010,7 @@ async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
             .contains("the integration github is retired")
     );
     unblocked(&stub, 43);
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    settled(&kestrel).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
@@ -1085,21 +1052,21 @@ async fn unassigning_a_held_delegation_cancels_it() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
-    firing_of(&kestrel, ASSIGNED, "held").await;
+    passed_until_fired(&kestrel, ASSIGNED, "held").await;
 
     unassigned(&stub, 43);
     stub.deliver(github_stub::issue_event(43, "unassigned", ""));
 
-    let canceled = firing_of(&kestrel, ASSIGNED, "canceled").await;
+    let canceled = passed_until_fired(&kestrel, ASSIGNED, "canceled").await;
     assert!(
         canceled
             .failure
             .unwrap_or_default()
             .contains("no longer delegated")
     );
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    settled(&kestrel).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
@@ -1119,9 +1086,7 @@ async fn two_held_delegations_of_one_issue_start_it_once() {
     stub.deliver(github_stub::issue_event(42, "closed", ""));
 
     let opened = passed_until_opened(&kestrel, 1).await;
-    for _ in 0..PASSES {
-        kestrel.work_pass().await;
-    }
+    settled(&kestrel).await;
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     let mut outcomes = Vec::new();
     for event in kestrel.events("acme").await {
@@ -1153,7 +1118,7 @@ async fn a_dispatch_works_ahead_of_a_blocker_and_says_so() {
     unassigned(&stub, 60);
     unassigned(&stub, 60);
     blocked_by(&stub, 60, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
 
     let fired = kestrel
@@ -1183,9 +1148,9 @@ async fn a_dispatch_works_ahead_of_a_blocker_and_says_so() {
 async fn a_blocker_added_after_a_workspace_opens_does_not_freeze_it() {
     let stub = GithubStub::start();
     script_command(&stub);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     dogfooding(&kestrel, &stub).await;
-    let workspace = workspaces(&kestrel, 1).await.remove(0);
+    let workspace = passed_until_opened(&kestrel, 1).await.remove(0);
     let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
 
@@ -1199,21 +1164,16 @@ async fn a_blocker_added_after_a_workspace_opens_does_not_freeze_it() {
         "@kestrel /again",
     ));
 
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let next = loop {
-        if let Some(claimed) = kestrel.claim_session().await {
-            break claimed;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the command never reached the open workspace"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    let next = passed_until(
+        &kestrel,
+        "the command never reached the open workspace",
+        async || kestrel.claim_session().await,
+    )
+    .await;
     assert_eq!(next.workspace, workspace.id);
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     assert_eq!(
-        firing_of(&kestrel, "com.github.issue_comment.created", "fed")
+        passed_until_fired(&kestrel, "com.github.issue_comment.created", "fed")
             .await
             .workspace,
         Some(workspace.id)
