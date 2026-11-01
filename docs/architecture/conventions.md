@@ -77,6 +77,13 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   has yet to get one, idle hints are a no-op in both drivers, and a sign-in test's only rival is a
   restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
   expires its own flow first. Stepping is opt-in until most of `suite` has moved.
+- **The CLI's process-lifecycle tests stay live** in `suite/cli/process.rs`, permanent exceptions
+  because an in-process fixture cannot reproduce OS process death:
+  `a_supervisor_outlives_its_stopped_control_plane_and_goes_with_its_instance` checks a supervisor
+  survives SIGTERM until its Instance is destroyed;
+  `killing_a_control_plane_without_restarting_stops_its_supervisor` checks cleanup after SIGKILL;
+  `a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered` interleaves SIGKILL and
+  restart with a real supervisor's turn.
 - **A startup checkpoint holds one execution while the live loops continue.** Arm
   `pause_supervisor_startup` on a stepped fixture before `go_live`, wait for the checkpoint to be
   reached after a new supervisor is published, and drop it to resume startup. This exposes the

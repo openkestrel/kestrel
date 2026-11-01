@@ -1,329 +1,58 @@
-//! The installed `kestrel` Client against a control plane booted as its own binary: nothing
-//! here reaches the database except through the operator boundary.
+//! CLI assertions use the operator boundary while work advances only at explicit passes.
+
+mod fixture;
+mod process;
 
 use crate::support;
-
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
+use fixture::{Booted, dispatched, refusal, succeeded};
 use serde_json::{Value, json};
+use std::time::Duration;
 use support::client::{self, Finished, Invocation};
 use support::github_stub::{self, GithubStub, ScriptedResponse};
 use support::scripted_agent::Script;
-use tempfile::TempDir;
 
-const PATIENCE: Duration = Duration::from_secs(30);
-
-struct Kestrel {
-    data_dir: TempDir,
+async fn declared(kestrel: &Booted) {
+    kestrel.run(&["organization", "declare", "acme"]).await;
+    kestrel
+        .run(&[
+            "project",
+            "declare",
+            support::repository::NAME,
+            "--repository",
+            support::repository::url(),
+            "--branch",
+            support::repository::BRANCH,
+        ])
+        .await;
+    kestrel
+        .run(&[
+            "agent",
+            "declare",
+            "builder",
+            "--model",
+            kestrel_scripted_agent::OTHER_MODEL,
+        ])
+        .await;
+    kestrel
+        .run_as(
+            &["credential", "set", support::PROVIDER_KEY],
+            Invocation::default().given(support::A_PROVIDER_KEY),
+        )
+        .await;
 }
 
-impl Drop for Kestrel {
-    fn drop(&mut self) {
-        let data_dir = self.data_dir.path().to_path_buf();
-        if !data_dir.join("kestrel.db").exists() {
-            return;
-        }
-        let driver = kestrel::compute::Driver::LocalExec(kestrel::compute::LocalExec::running(
-            support::supervisor::binary(),
-        ));
-        support::destroy_instances_on_drop(data_dir, Some(driver));
-    }
-}
-
-/// A control plane running over a [`Kestrel`]'s data directory, and every line it has said.
-struct Booted {
-    child: Child,
-    said: Arc<Mutex<String>>,
-    operator: String,
-    stopped: bool,
-}
-
-impl Kestrel {
-    fn new() -> Self {
-        Self {
-            data_dir: TempDir::new().expect("a temporary data directory"),
-        }
-    }
-
-    /// An ephemeral link port, so tests that boot one concurrently never race over kestrel's
-    /// default.
-    fn boot(&self) -> Booted {
-        self.booting("127.0.0.1:0", Script::Speaks, "info")
-    }
-
-    fn booting(&self, listen: &str, script: Script, level: &str) -> Booted {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_kestrel-control-plane"))
-            .env("KESTREL_DATA_DIR", self.data_dir.path())
-            .env("KESTREL_LISTEN", listen)
-            .env("KESTREL_OPERATOR_LISTEN", "127.0.0.1:0")
-            .env("KESTREL_COMPUTE", "local-exec")
-            .env("KESTREL_SUPERVISOR", support::supervisor::binary())
-            .env(
-                "KESTREL_QUIET_PERIOD",
-                support::QUIET_PERIOD.as_secs().to_string(),
-            )
-            .env(
-                "KESTREL_HARNESS_COMMANDS",
-                format!(
-                    "{}={}",
-                    support::HARNESS,
-                    support::scripted_agent::playing(script)
-                ),
-            )
-            .env("RUST_LOG", level)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the control plane should spawn");
-
-        // Drained as it is said, so a chatty log cannot block the process on a full pipe.
-        let stderr = child.stderr.take().expect("stderr should be piped");
-        let said = Arc::new(Mutex::new(String::new()));
-        let draining = Arc::clone(&said);
-        std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let mut said = draining.lock().expect("the log should not be poisoned");
-                said.push_str(&line);
-                said.push('\n');
-            }
-        });
-        let operator = operator_of(&said);
-
-        Booted {
-            child,
-            said,
-            operator,
-            stopped: false,
-        }
-    }
-}
-
-impl Booted {
-    fn client(&self, args: &[&str]) -> Finished {
-        client::ran(&self.operator, args)
-    }
-
-    fn client_as(&self, args: &[&str], invocation: Invocation) -> Finished {
-        client::ran_as(&self.operator, args, invocation)
-    }
-
-    fn run(&self, args: &[&str]) -> String {
-        succeeded(args, &self.client(args))
-    }
-
-    fn run_as(&self, args: &[&str], invocation: Invocation) -> String {
-        succeeded(args, &self.client_as(args, invocation))
-    }
-
-    fn records(&self, args: &[&str]) -> Vec<Value> {
-        self.client(args).records()
-    }
-
-    fn record(&self, args: &[&str]) -> Value {
-        self.client(args).json()
-    }
-
-    /// The refusal itself, so a test asserting one never passes on a command that succeeded.
-    fn refused(&self, args: &[&str]) -> String {
-        refusal(args, &self.client(args))
-    }
-
-    fn refused_as(&self, args: &[&str], invocation: Invocation) -> String {
-        refusal(args, &self.client_as(args, invocation))
-    }
-
-    fn until(&self, args: &[&str], listed: impl Fn(&[Value]) -> bool, what: &str) -> Vec<Value> {
-        let deadline = Instant::now() + PATIENCE;
-
-        loop {
-            let shown = self.records(args);
-            if listed(&shown) {
-                return shown;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "`kestrel {}` never {what}. the last listing was:\n{shown:?}",
-                args.join(" ")
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    fn said(&self) -> String {
-        self.said
-            .lock()
-            .expect("the log should not be poisoned")
-            .clone()
-    }
-
-    /// `Child::kill` is a `SIGKILL`, so nothing the control plane holds in memory is given a
-    /// chance to land.
-    fn killed(mut self) {
-        let _ = self.child.kill();
-        self.child
-            .wait()
-            .expect("the control plane should be waitable");
-        self.stopped = true;
-    }
-
-    /// Signalled rather than killed, so the work role sees a stopped Session's supervisor off the
-    /// link before it goes.
-    fn terminated(mut self) {
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGTERM);
-        }
-        self.child
-            .wait()
-            .expect("the control plane should be waitable");
-        self.stopped = true;
-    }
-}
-
-impl Drop for Booted {
-    fn drop(&mut self) {
-        if self.stopped || self.child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        #[cfg(unix)]
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGTERM);
-        }
-        #[cfg(not(unix))]
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn succeeded(args: &[&str], finished: &Finished) -> String {
-    assert!(
-        finished.status.success(),
-        "`kestrel {}` failed with {}:\n{}",
-        args.join(" "),
-        finished.status,
-        finished.err
-    );
-    finished.out.join("\n")
-}
-
-fn refusal(args: &[&str], finished: &Finished) -> String {
-    assert!(
-        !finished.status.success(),
-        "`kestrel {}` was expected to be refused, and succeeded",
-        args.join(" ")
-    );
-    finished.err.clone()
-}
-
-fn operator_of(said: &Mutex<String>) -> String {
-    let deadline = Instant::now() + PATIENCE;
-
-    loop {
-        let started = said
-            .lock()
-            .expect("the log should not be poisoned")
-            .lines()
-            .find(|line| line.contains("role started") && line.contains("operator="))
-            .map(str::to_owned);
-        if let Some(line) = started {
-            let address = line
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix("operator="))
-                .expect("the line should name the operator address");
-            return format!("http://{address}");
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the control plane never said where operators reach it:\n{}",
-            said.lock().expect("the log should not be poisoned")
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-/// A port nothing is listening on, so a control plane that is killed comes back on the
-/// address the Environment it left behind already dialled.
-fn a_free_port() -> String {
-    let port = TcpListener::bind("127.0.0.1:0")
-        .expect("a free port")
-        .local_addr()
-        .expect("a bound address")
-        .port();
-
-    format!("127.0.0.1:{port}")
-}
-
-fn sessions(kestrel: &Booted, workspace: &str) -> Vec<Value> {
-    kestrel.records(&["session", "list", "--workspace", workspace, "--json"])
-}
-
-/// Answering a turn never ends a Session, so one waiting is stopped the way a person would.
-fn dispatched(kestrel: &Booted, workspace: &str) -> Vec<Value> {
-    let deadline = Instant::now() + PATIENCE;
-
-    loop {
-        let listed = sessions(kestrel, workspace);
-        if listed
-            .iter()
-            .all(|session| !session["exit"]["status"].is_null())
-        {
-            return listed;
-        }
-        for waiting in listed
-            .iter()
-            .filter(|session| session["state"] == "waiting")
-        {
-            let session = waiting["id"].as_str().expect("a session's identifier");
-            kestrel.run(&["session", "stop", session]);
-        }
-        assert!(
-            Instant::now() < deadline,
-            "no session in the workspace {workspace} ended. the last listing was:\n{listed:?}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn declared(kestrel: &Booted) {
-    kestrel.run(&["organization", "declare", "acme"]);
-    kestrel.run(&[
-        "project",
-        "declare",
-        support::repository::NAME,
-        "--repository",
-        support::repository::url(),
-        "--branch",
-        support::repository::BRANCH,
-    ]);
-    kestrel.run(&[
-        "agent",
-        "declare",
-        "builder",
-        "--model",
-        kestrel_scripted_agent::OTHER_MODEL,
-    ]);
-    kestrel.run_as(
-        &["credential", "set", support::PROVIDER_KEY],
-        Invocation::default().given(support::A_PROVIDER_KEY),
-    );
-}
-
-fn opened(kestrel: &Booted) -> String {
-    let opened = kestrel.record(&[
-        "workspace",
-        "open",
-        "--project",
-        support::repository::NAME,
-        "--agent",
-        "builder",
-        "--json",
-    ]);
+async fn opened(kestrel: &Booted) -> String {
+    let opened = kestrel
+        .record(&[
+            "workspace",
+            "open",
+            "--project",
+            support::repository::NAME,
+            "--agent",
+            "builder",
+            "--json",
+        ])
+        .await;
 
     opened["workspace"]["name"]
         .as_str()
@@ -331,62 +60,30 @@ fn opened(kestrel: &Booted) -> String {
         .to_owned()
 }
 
-/// Each entry as `seq kind …`, without the moment it was appended, which is different every
-/// session.
-fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
-    kestrel
-        .records(&[
+#[tokio::test]
+async fn a_session_show_says_the_title_its_options_and_its_commands() {
+    let booted = Booted::playing(Script::Announces).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
             "workspace",
-            "transcript",
-            workspace,
-            "--no-summaries",
-            "--json",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
         ])
-        .iter()
-        .map(|recorded| {
-            let entry = &recorded["entry"];
-            let said = match entry["type"].as_str().expect("an entry kind") {
-                "participant_joined" => format!("participant joined {}", entry["participant"]),
-                "session_started" => {
-                    format!("session started {} {}", entry["session"], entry["agent"])
-                }
-                "said" => format!("said {} {}", entry["participant"], entry["message"]),
-                "brief" => format!("brief {}", entry["brief"]),
-                "session_ended" => format!(
-                    "session ended {} {}",
-                    entry["session"], entry["exit"]["status"]
-                ),
-                "instance_released" => format!(
-                    "instance released {} {}",
-                    entry["participant"], entry["instance"]
-                ),
-                kind => kind.to_owned(),
-            };
-            format!("{} {}", recorded["seq"], said.replace('"', ""))
-        })
-        .collect()
-}
+        .await;
 
-#[test]
-fn a_session_show_says_the_title_its_options_and_its_commands() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Announces, "info");
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-
-    let listed = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| !session["title"].is_null()),
-        "show the harness's title",
-    );
+    booted.plane.work_pass().await;
+    let listed = booted
+        .until(
+            &["session", "list", "--workspace", &workspace, "--json"],
+            |listed| listed.iter().any(|session| !session["title"].is_null()),
+            "show the harness's title",
+        )
+        .await;
     let session = listed
         .iter()
         .find(|session| !session["title"].is_null())
@@ -394,7 +91,7 @@ fn a_session_show_says_the_title_its_options_and_its_commands() {
         .expect("the session's identifier")
         .to_owned();
 
-    let shown = booted.run(&["session", "show", &session]);
+    let shown = booted.run(&["session", "show", &session]).await;
 
     assert!(
         shown.contains(kestrel_scripted_agent::TITLE),
@@ -413,29 +110,33 @@ fn a_session_show_says_the_title_its_options_and_its_commands() {
         "the commands are not shown:\n{shown}"
     );
 
-    booted.terminated();
+    booted.plane.teardown().await;
 }
 
-#[test]
-fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
+#[tokio::test]
+async fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
+        ])
+        .await;
 
-    let waiting = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "waiting"),
-        "reach a waiting session",
-    );
+    booted.plane.work_pass().await;
+    let waiting = booted
+        .until(
+            &["session", "list", "--workspace", &workspace, "--json"],
+            |listed| listed.iter().any(|session| session["state"] == "waiting"),
+            "reach a waiting session",
+        )
+        .await;
     let session = waiting
         .iter()
         .find(|session| session["state"] == "waiting")
@@ -443,28 +144,32 @@ fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
         .expect("the waiting session's identifier")
         .to_owned();
     // The bookkeeping report is debounced, so the option is waited for before it is changed.
-    booted.until(
-        &["session", "show", &session, "--json"],
-        |shown| {
-            shown[0]["options"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|option| option["category"] == "model")
-        },
-        "report its options",
-    );
+    booted
+        .until(
+            &["session", "show", &session, "--json"],
+            |shown| {
+                shown[0]["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|option| option["category"] == "model")
+            },
+            "report its options",
+        )
+        .await;
 
-    let changed = booted.client(&[
-        "session",
-        "option",
-        "set",
-        &session,
-        "model",
-        kestrel_scripted_agent::OTHER_MODEL,
-        "--as-participant",
-        "operator",
-    ]);
+    let changed = booted
+        .client(&[
+            "session",
+            "option",
+            "set",
+            &session,
+            "model",
+            kestrel_scripted_agent::OTHER_MODEL,
+            "--as-participant",
+            "operator",
+        ])
+        .await;
     assert!(
         changed.status.success(),
         "`session option set` failed:\n{}",
@@ -476,64 +181,71 @@ fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
         changed.err
     );
 
-    let settled = booted.until(
-        &["session", "show", &session, "--json"],
-        |shown| {
-            let shown = &shown[0];
-            shown["changing_options"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-                && shown["options"]
+    let settled = booted
+        .until(
+            &["session", "show", &session, "--json"],
+            |shown| {
+                let shown = &shown[0];
+                shown["changing_options"]
                     .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|option| {
-                        option["category"] == "model"
-                            && option["current"] == kestrel_scripted_agent::OTHER_MODEL
-                    })
-        },
-        "apply the changed model",
-    );
+                    .is_some_and(Vec::is_empty)
+                    && shown["options"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|option| {
+                            option["category"] == "model"
+                                && option["current"] == kestrel_scripted_agent::OTHER_MODEL
+                        })
+            },
+            "apply the changed model",
+        )
+        .await;
     assert_eq!(
         settled[0]["changing_options"].as_array().map(Vec::len),
         Some(0)
     );
 
-    booted.terminated();
+    booted.plane.teardown().await;
 }
 
-#[test]
-fn workspace_open_declares_the_mode_its_first_session_runs_in() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    let workspace = booted.record(&[
-        "workspace",
-        "open",
-        "--project",
-        support::repository::NAME,
-        "--agent",
-        "builder",
-        "--mode",
-        kestrel_scripted_agent::SWITCHED_MODE,
-        "--brief",
-        "go",
-        "--as-participant",
-        "operator",
-        "--json",
-    ])["workspace"]["name"]
+#[tokio::test]
+async fn workspace_open_declares_the_mode_its_first_session_runs_in() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = booted
+        .record(&[
+            "workspace",
+            "open",
+            "--project",
+            support::repository::NAME,
+            "--agent",
+            "builder",
+            "--mode",
+            kestrel_scripted_agent::SWITCHED_MODE,
+            "--brief",
+            "go",
+            "--as-participant",
+            "operator",
+            "--json",
+        ])
+        .await["workspace"]["name"]
         .as_str()
         .expect("the opened workspace's name")
         .to_owned();
 
-    let listed = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "waiting"),
-        "answer its first turn",
-    );
+    booted.plane.work_pass().await;
+    let listed = booted
+        .until(
+            &["session", "list", "--workspace", &workspace, "--json"],
+            |listed| listed.iter().any(|session| session["state"] == "waiting"),
+            "answer its first turn",
+        )
+        .await;
     let session = listed[0]["id"].as_str().expect("the session's identifier");
-    let shown: Value = serde_json::from_str(&booted.run(&["session", "show", session, "--json"]))
-        .expect("the session's fields as JSON");
+    let shown: Value =
+        serde_json::from_str(&booted.run(&["session", "show", session, "--json"]).await)
+            .expect("the session's fields as JSON");
 
     assert_eq!(
         shown["mode"],
@@ -541,98 +253,106 @@ fn workspace_open_declares_the_mode_its_first_session_runs_in() {
         "the mode the open declared was not set on the harness: {shown}"
     );
 
-    booted.terminated();
+    booted.plane.teardown().await;
 }
 
-#[test]
-fn a_role_boots_on_an_empty_data_directory_and_makes_its_database() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn a_role_boots_on_an_empty_data_directory_and_makes_its_database() {
+    let booted = Booted::playing(Script::Speaks).await;
 
-    let booted = kestrel.boot();
-
-    assert!(kestrel.data_dir.path().join("kestrel.db").exists());
-    assert_eq!(booted.run(&["organization", "list"]), "");
+    assert!(booted.plane.data_dir().join("kestrel.db").exists());
+    assert_eq!(booted.run(&["organization", "list"]).await, "");
 }
 
-#[test]
-fn a_disabled_trigger_shows_its_reason_and_budget() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    booted.run(&[
-        "trigger",
-        "declare",
-        "ready",
-        "--filter",
-        r#"{"exact": {"type": "com.github.issues.labeled"}}"#,
-        "--brief",
-        "Work on {{ event.data.issue.title }}",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
-    booted.run(&["trigger", "disable", "ready"]);
+#[tokio::test]
+async fn a_disabled_trigger_shows_its_reason_and_budget() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    booted
+        .run(&[
+            "trigger",
+            "declare",
+            "ready",
+            "--filter",
+            r#"{"exact": {"type": "com.github.issues.labeled"}}"#,
+            "--brief",
+            "Work on {{ event.data.issue.title }}",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
+    booted.run(&["trigger", "disable", "ready"]).await;
 
-    let trigger = booted.record(&["trigger", "show", "ready", "--json"]);
+    let trigger = booted.record(&["trigger", "show", "ready", "--json"]).await;
 
     assert_eq!(trigger["state"], "disabled:operator");
     assert_eq!(trigger["disabled_because"], "disabled by an operator");
     assert_eq!(trigger["firing_budget"]["limit"], 10);
 }
 
-#[test]
-fn an_agents_model_changes_without_declaring_the_agent_again() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    booted.run(&["organization", "declare", "acme"]);
-    booted.run(&[
-        "agent",
-        "declare",
-        "builder",
-        "--harness",
-        "codex",
-        "--model",
-        "claude-opus-5",
-    ]);
+#[tokio::test]
+async fn an_agents_model_changes_without_declaring_the_agent_again() {
+    let booted = Booted::playing(Script::Speaks).await;
+    booted.run(&["organization", "declare", "acme"]).await;
+    booted
+        .run(&[
+            "agent",
+            "declare",
+            "builder",
+            "--harness",
+            "codex",
+            "--model",
+            "claude-opus-5",
+        ])
+        .await;
 
     assert_eq!(
-        booted.run(&["agent", "model", "builder", "--model", "claude-sonnet-5"]),
+        booted
+            .run(&["agent", "model", "builder", "--model", "claude-sonnet-5"])
+            .await,
         "claude-sonnet-5"
     );
-    let agents = booted.records(&["agent", "list", "--json"]);
+    let agents = booted.records(&["agent", "list", "--json"]).await;
     assert_eq!(agents.len(), 1, "{agents:?}");
     assert_eq!(agents[0]["name"], "builder");
     assert_eq!(agents[0]["harness"], "codex");
     assert_eq!(agents[0]["model"], "claude-sonnet-5");
     assert_eq!(
-        booted.record(&["agent", "model", "builder", "--json"])["model"],
+        booted
+            .record(&["agent", "model", "builder", "--json"])
+            .await["model"],
         Value::Null
     );
     assert!(
         booted
             .refused(&["agent", "model", "reviewer", "--model", "claude-sonnet-5"])
+            .await
             .contains("no agent named reviewer"),
     );
 }
 
-#[test]
-fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-    dispatched(&booted, &workspace);
+#[tokio::test]
+async fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
+        ])
+        .await;
+    dispatched(&booted, &workspace).await;
 
-    let shown = booted.record(&["workspace", "show", &workspace, "--json"]);
+    let shown = booted
+        .record(&["workspace", "show", &workspace, "--json"])
+        .await;
     let instance = shown["instance"]
         .as_str()
         .expect("the workspace keeps its instance")
@@ -642,29 +362,42 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
         Value::Null,
         "a checkout the remote can restore was held"
     );
-    assert_eq!(booted.run(&["instance", "list"]), "");
+    assert_eq!(booted.run(&["instance", "list"]).await, "");
 
     assert_eq!(
-        booted.run(&[
-            "instance",
-            "release",
-            &workspace,
-            "--as-participant",
-            "operator"
-        ]),
+        booted
+            .run(&[
+                "instance",
+                "release",
+                &workspace,
+                "--as-participant",
+                "operator"
+            ])
+            .await,
         instance
     );
 
     assert_eq!(
-        booted.record(&["workspace", "show", &workspace, "--json"])["instance"],
+        booted
+            .record(&["workspace", "show", &workspace, "--json"])
+            .await["instance"],
         Value::Null,
         "a released instance is still the workspace's"
     );
-    assert_eq!(
-        transcribed(&booted, &workspace).last(),
-        Some(&format!("11 instance released operator {instance}")),
-        "the release is not on the record"
-    );
+    let transcript = booted
+        .records(&[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--no-summaries",
+            "--json",
+        ])
+        .await;
+    let released = transcript.last().expect("the release is on the record");
+    assert_eq!(released["seq"], 11);
+    assert_eq!(released["entry"]["type"], "instance_released");
+    assert_eq!(released["entry"]["participant"], "operator");
+    assert_eq!(released["entry"]["instance"], instance);
     assert!(
         booted
             .refused(&[
@@ -674,18 +407,20 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
                 "--as-participant",
                 "operator"
             ])
+            .await
             .contains("no instance"),
     );
 }
 
-#[test]
-fn a_workspace_post_without_a_participant_or_an_operator_says_how_to_name_one() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    let workspace = opened(&booted);
+#[tokio::test]
+async fn a_workspace_post_without_a_participant_or_an_operator_says_how_to_name_one() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
 
-    let refused = booted.refused(&["workspace", "post", &workspace, "go"]);
+    let refused = booted
+        .refused(&["workspace", "post", &workspace, "go"])
+        .await;
 
     assert!(
         refused.contains("kestrel operator name <NAME>"),
@@ -693,142 +428,169 @@ fn a_workspace_post_without_a_participant_or_an_operator_says_how_to_name_one() 
     );
 }
 
-#[test]
-fn a_held_message_is_printed_listed_edited_and_withdrawn() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Dawdles, "info");
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-    booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "working"),
-        "reach a working session",
-    );
+#[tokio::test]
+async fn a_held_message_is_printed_listed_edited_and_withdrawn() {
+    let booted = Booted::playing(Script::WorksUntilCancelled).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
+        ])
+        .await;
+    booted.plane.work_pass().await;
+    booted
+        .until(
+            &["session", "list", "--workspace", &workspace, "--json"],
+            |listed| listed.iter().any(|session| session["state"] == "working"),
+            "reach a working session",
+        )
+        .await;
 
-    let held = booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "alice",
-        "one more change",
-    ]);
+    let held = booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "alice",
+            "one more change",
+        ])
+        .await;
     let id: i64 = held.parse().expect("the post prints the held id");
-    let listed = booted.record(&["workspace", "show", &workspace, "--json"]);
+    let listed = booted
+        .record(&["workspace", "show", &workspace, "--json"])
+        .await;
     assert_eq!(listed["held_messages"][0]["id"], id);
     assert_eq!(listed["held_messages"][0]["participant"], "alice");
     assert_eq!(listed["held_messages"][0]["message"], "one more change");
 
-    let edited = booted.record(&[
-        "workspace",
-        "message",
-        "edit",
-        &workspace,
-        &held,
-        "--as-participant",
-        "alice",
-        "the edited change",
-        "--json",
-    ]);
+    booted.plane.advance(Duration::from_millis(1)).await;
+    let edited = booted
+        .record(&[
+            "workspace",
+            "message",
+            "edit",
+            &workspace,
+            &held,
+            "--as-participant",
+            "alice",
+            "the edited change",
+            "--json",
+        ])
+        .await;
     assert_eq!(edited["id"], id);
     assert_eq!(edited["message"], "the edited change");
     assert!(!edited["edited_at"].is_null(), "{edited}");
 
-    let refused = booted.refused(&[
-        "workspace",
-        "message",
-        "edit",
-        &workspace,
-        &held,
-        "--as-participant",
-        "bob",
-        "mine now",
-    ]);
+    let refused = booted
+        .refused(&[
+            "workspace",
+            "message",
+            "edit",
+            &workspace,
+            &held,
+            "--as-participant",
+            "bob",
+            "mine now",
+        ])
+        .await;
     assert!(
         refused.contains("only its author may change it"),
         "{refused}"
     );
 
-    booted.run(&[
-        "workspace",
-        "message",
-        "withdraw",
-        &workspace,
-        &held,
-        "--as-participant",
-        "alice",
-    ]);
+    booted
+        .run(&[
+            "workspace",
+            "message",
+            "withdraw",
+            &workspace,
+            &held,
+            "--as-participant",
+            "alice",
+        ])
+        .await;
     assert_eq!(
-        booted.record(&["workspace", "show", &workspace, "--json"])["held_messages"],
+        booted
+            .record(&["workspace", "show", &workspace, "--json"])
+            .await["held_messages"],
         serde_json::json!([])
     );
-    let refused = booted.refused(&[
-        "workspace",
-        "message",
-        "withdraw",
-        &workspace,
-        &held,
-        "--as-participant",
-        "alice",
-    ]);
+    let refused = booted
+        .refused(&[
+            "workspace",
+            "message",
+            "withdraw",
+            &workspace,
+            &held,
+            "--as-participant",
+            "alice",
+        ])
+        .await;
     assert!(refused.contains("already withdrawn"), "{refused}");
 }
 
-#[test]
-fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::WorksUntilCancelled, "info");
-    declared(&booted);
+#[tokio::test]
+async fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
+    let booted = Booted::playing(Script::WorksUntilCancelled).await;
+    declared(&booted).await;
     // Opened with a Brief, so the session's first turn is its instruction and nothing races it.
-    let workspace = booted.record(&[
-        "workspace",
-        "open",
-        "--project",
-        support::repository::NAME,
-        "--agent",
-        "builder",
-        "--brief",
-        "go",
-        "--json",
-    ])["workspace"]["name"]
+    let workspace = booted
+        .record(&[
+            "workspace",
+            "open",
+            "--project",
+            support::repository::NAME,
+            "--agent",
+            "builder",
+            "--brief",
+            "go",
+            "--json",
+        ])
+        .await["workspace"]["name"]
         .as_str()
         .expect("the opened workspace's name")
         .to_owned();
-    let listed = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "working"),
-        "reach a working session",
-    );
+    booted.plane.work_pass().await;
+    let listed = booted
+        .until(
+            &["session", "list", "--workspace", &workspace, "--json"],
+            |listed| listed.iter().any(|session| session["state"] == "working"),
+            "reach a working session",
+        )
+        .await;
     let session = listed[0]["id"]
         .as_str()
         .expect("the working session's id")
         .to_owned();
 
-    let interrupted = booted.record(&[
-        "session",
-        "interrupt",
-        &session,
-        "--as-participant",
-        "alice",
-        "--json",
-    ]);
+    let interrupted = booted
+        .record(&[
+            "session",
+            "interrupt",
+            &session,
+            "--as-participant",
+            "alice",
+            "--json",
+        ])
+        .await;
     assert_eq!(interrupted["id"], session);
     assert_eq!(interrupted["state"], "working");
     assert_eq!(interrupted["interrupting"]["participant"], "alice");
 
-    let waiting = booted.until(
-        &["session", "show", &session, "--json"],
-        |shown| shown.iter().any(|session| session["state"] == "waiting"),
-        "settle waiting",
-    );
+    let waiting = booted
+        .until(
+            &["session", "show", &session, "--json"],
+            |shown| shown.iter().any(|session| session["state"] == "waiting"),
+            "settle waiting",
+        )
+        .await;
     assert_eq!(waiting[0]["state"], "waiting");
     assert!(
         booted
@@ -839,17 +601,20 @@ fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
                 "--as-participant",
                 "alice"
             ])
+            .await
             .contains("waiting"),
     );
 
-    let entries = booted.records(&[
-        "workspace",
-        "transcript",
-        &workspace,
-        "--kinds",
-        "shared_state,narration,detail",
-        "--json",
-    ]);
+    let entries = booted
+        .records(&[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--kinds",
+            "shared_state,narration,detail",
+            "--json",
+        ])
+        .await;
     assert!(
         entries.iter().any(|recorded| {
             recorded["entry"]["type"] == "turn_interrupted"
@@ -859,22 +624,23 @@ fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
     );
 }
 
-#[test]
-fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
+#[tokio::test]
+async fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
+        ])
+        .await;
 
-    let listed = dispatched(&booted, &workspace);
+    let listed = dispatched(&booted, &workspace).await;
     let session = listed[0]["id"]
         .as_str()
         .expect("the session's id")
@@ -894,166 +660,27 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     assert!(
         booted
             .refused(&["session", "stop", &session])
+            .await
             .contains("has already ended"),
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_supervisor_outlives_its_stopped_control_plane_and_goes_with_its_instance() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-    let listed = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "waiting"),
-        "reach a waiting session",
-    );
-    let supervisor = listed[0]["supervisor"]
-        .as_str()
-        .expect("the waiting session has a supervisor")
-        .to_owned();
-
-    drop(booted);
-
-    let supervisor = support::environment::Environment::named(&supervisor);
-    assert!(
-        supervisor
-            .is_running(std::time::Duration::from_millis(500))
-            .await,
-        "the supervisor went with its control plane"
-    );
-    drop(kestrel);
-    supervisor.is_gone().await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn killing_a_control_plane_without_restarting_stops_its_supervisor() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-    let listed = booted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| listed.iter().any(|session| session["state"] == "waiting"),
-        "reach a waiting session",
-    );
-    let supervisor = listed[0]["supervisor"].as_str().unwrap().to_owned();
-    let instance = listed[0]["instance"].as_str().unwrap().to_owned();
-
-    booted.killed();
-    drop(kestrel);
-
-    support::environment::Environment::named(&supervisor)
-        .is_gone()
-        .await;
-    assert!(!support::environment::Environment::root_of(&instance).exists());
-}
-
-/// ADR-0002's definition of done for rung 0.1, out of process and against a real `SIGKILL`:
-/// nothing the control plane held in memory lands, and the Environment it provisioned
-/// outlives it.
-#[test]
-fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
-    let kestrel = Kestrel::new();
-    let listen = a_free_port();
-    let killed = kestrel.booting(&listen, Script::Lingers, "info");
-    declared(&killed);
-    let workspace = opened(&killed);
-    let session = killed.record(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-        "--json",
-    ])["session"]["id"]
-        .as_str()
-        .expect("the session the post reached")
-        .to_owned();
-    // The transcript says the Session started only once the supervisor holds the Start instruction,
-    // which is the first moment a restart has anything to recover; an instance alone is not.
-    killed.until(
-        &["workspace", "transcript", &workspace, "--json"],
-        |transcribed| {
-            transcribed
-                .iter()
-                .any(|recorded| recorded["entry"]["type"] == "session_started")
-        },
-        "started its turn",
-    );
-    killed.killed();
-
-    let restarted = kestrel.booting(&listen, Script::Lingers, "info");
-    restarted.until(
-        &["session", "list", "--workspace", &workspace, "--json"],
-        |listed| {
-            listed
-                .iter()
-                .any(|session| session["state"] == "waiting" || !session["exit"].is_null())
-        },
-        "answered its turn",
-    );
-    restarted.run(&["session", "stop", &session]);
-    let listed = sessions(&restarted, &workspace);
-    let transcript = transcribed(&restarted, &workspace);
-    // The supervisor belongs to the control plane that was killed, so this one cannot wait it off
-    // the link on the way down; it leaves within a poll of the stop reaching it.
-    std::thread::sleep(Duration::from_secs(1));
-    restarted.terminated();
-
-    assert_eq!(
-        listed[0]["exit"]["status"], "succeeded",
-        "the session's turn was not answered after the restart: {listed:?}"
-    );
-    assert_eq!(
-        transcript,
-        vec![
-            "1 participant joined builder".to_owned(),
-            "2 participant joined operator".to_owned(),
-            "3 brief go".to_owned(),
-            format!("4 session started {session} builder"),
-            "8 said builder half of one message, and the other half".to_owned(),
-            "9 said builder a second message".to_owned(),
-            format!("10 session ended {session} succeeded"),
-        ]
     );
 }
 
 /// A Client hands the control plane every secret it holds over the operator boundary, and
 /// the control plane says none of them back while it takes them.
-#[test]
-fn secrets_set_through_the_client_appear_in_no_log_line() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn secrets_set_through_the_client_appear_in_no_log_line() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
+    let booted = Booted::traced().await;
     let provider_key = "sk-kestrel-should-never-say-this-either";
     let signing_secret = "whsec-kestrel-should-never-say-this";
 
-    let mut printed = booted.run(&["organization", "declare", "acme"]);
-    printed += &booted.run_as(
-        &["credential", "set", "ANTHROPIC_API_KEY"],
-        Invocation::default().given(provider_key),
-    );
+    let mut printed = booted.run(&["organization", "declare", "acme"]).await;
+    printed += &booted
+        .run_as(
+            &["credential", "set", "ANTHROPIC_API_KEY"],
+            Invocation::default().given(provider_key),
+        )
+        .await;
     let registering = [
         "integration",
         "github",
@@ -1072,12 +699,12 @@ fn secrets_set_through_the_client_appear_in_no_log_line() {
         "--webhook-secret",
         signing_secret,
     ];
-    printed += &booted.run(&registering);
-    printed += &booted.refused(&registering);
-    printed += &booted.run(&["credential", "list"]);
-    printed += &booted.run(&["integration", "list"]);
+    printed += &booted.run(&registering).await;
+    printed += &booted.refused(&registering).await;
+    printed += &booted.run(&["credential", "list"]).await;
+    printed += &booted.run(&["integration", "list"]).await;
     let said = booted.said();
-    booted.killed();
+    booted.plane.teardown().await;
 
     assert!(
         said.contains("INSERT INTO provider_credential")
@@ -1094,30 +721,32 @@ fn secrets_set_through_the_client_appear_in_no_log_line() {
     }
 }
 
-fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
-    kestrel.run(&["organization", "declare", "acme"]);
-    kestrel.run(&[
-        "integration",
-        "github",
-        "register",
-        "hub",
-        "--repository",
-        "jtmthf/kestrel",
-        "--app-id",
-        "1",
-        "--installation",
-        "2",
-        "--private-key",
-        support::PRIVATE_KEY,
-        "--api",
-        &stub.base_url(),
-        "--interval",
-        interval,
-    ]);
+async fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
+    kestrel.run(&["organization", "declare", "acme"]).await;
+    kestrel
+        .run(&[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            support::PRIVATE_KEY,
+            "--api",
+            &stub.base_url(),
+            "--interval",
+            interval,
+        ])
+        .await;
 }
 
-#[test]
-fn the_client_selects_an_integration_for_a_projects_repository() {
+#[tokio::test]
+async fn the_client_selects_an_integration_for_a_projects_repository() {
     const DECLARE: [&str; 9] = [
         "project",
         "declare",
@@ -1129,49 +758,54 @@ fn the_client_selects_an_integration_for_a_projects_repository() {
         "--branch",
         "main",
     ];
-    let kestrel = Kestrel::new();
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
-    watching(&booted, &stub, "1h");
+    let booted = Booted::playing(Script::Speaks).await;
+    watching(&booted, &stub, "1h").await;
 
-    let refused = booted.refused(&DECLARE);
+    let refused = booted.refused(&DECLARE).await;
     assert!(refused.contains("has no branch main"), "{refused}");
-    assert!(booted.records(&["project", "list", "--json"]).is_empty());
+    assert!(
+        booted
+            .records(&["project", "list", "--json"])
+            .await
+            .is_empty()
+    );
 
     stub.script_answer(
         "GET",
         "/branches/main",
         ScriptedResponse::ok(r#"{"name":"main"}"#),
     );
-    let declared = booted.record(&[&DECLARE[..], &["--json"]].concat());
+    let declared = booted.record(&[&DECLARE[..], &["--json"]].concat()).await;
     assert_eq!(
         declared["repositories"],
         serde_json::json!(["https://github.com/jtmthf/kestrel.git"])
     );
     assert_eq!(declared["integrations"][0]["integration"], "hub");
 
-    let unpaired = booted.refused(&[
-        "project",
-        "declare",
-        "two",
-        "--repository",
-        "jtmthf/kestrel",
-        "--repository",
-        "jtmthf/other",
-        "--integration",
-        "hub",
-        "--branch",
-        "main",
-    ]);
+    let unpaired = booted
+        .refused(&[
+            "project",
+            "declare",
+            "two",
+            "--repository",
+            "jtmthf/kestrel",
+            "--repository",
+            "jtmthf/other",
+            "--integration",
+            "hub",
+            "--branch",
+            "main",
+        ])
+        .await;
     assert!(unpaired.contains("REPOSITORY=hub"), "{unpaired}");
 }
 
-#[test]
-fn the_client_reads_repository_metadata_and_pagination_through_its_selected_integration() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_reads_repository_metadata_and_pagination_through_its_selected_integration() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
-    watching(&booted, &stub, "1h");
+    let booted = Booted::playing(Script::Speaks).await;
+    watching(&booted, &stub, "1h").await;
     let page = serde_json::json!({
         "total_count": 3,
         "repositories": [{
@@ -1192,7 +826,7 @@ fn the_client_reads_repository_metadata_and_pagination_through_its_selected_inte
         "--per-page",
         "1",
     ];
-    let finished = booted.client(&[&args[..], &["--json"]].concat());
+    let finished = booted.client(&[&args[..], &["--json"]].concat()).await;
     assert!(finished.status.success(), "{}", finished.err);
     let listed = finished.json();
     assert_eq!(listed["repositories"][0]["default_branch"], "trunk");
@@ -1210,7 +844,7 @@ fn the_client_reads_repository_metadata_and_pagination_through_its_selected_inte
         "/installation/repositories",
         ScriptedResponse::ok(page.to_string()),
     );
-    let shown = booted.run(&args);
+    let shown = booted.run(&args).await;
     assert!(
         shown.contains("trunk") && shown.contains("page 3"),
         "{shown}"
@@ -1220,112 +854,127 @@ fn the_client_reads_repository_metadata_and_pagination_through_its_selected_inte
         "/installation/repositories",
         github_stub::rate_limited(),
     );
-    let refused = booted.refused(&args);
+    let refused = booted.refused(&args).await;
     assert!(
         refused.contains("retry") || refused.contains("again"),
         "{refused}"
     );
 }
 
-#[test]
-fn the_client_retires_an_integration_only_on_an_explicit_choice() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_retires_an_integration_only_on_an_explicit_choice() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
-    watching(&booted, &stub, "1h");
+    let booted = Booted::playing(Script::Speaks).await;
+    watching(&booted, &stub, "1h").await;
 
-    let unchosen = booted.refused(&["integration", "retire", "hub"]);
+    let unchosen = booted.refused(&["integration", "retire", "hub"]).await;
     assert!(unchosen.contains("--yes"), "{unchosen}");
     assert_eq!(
-        booted.record(&["integration", "show", "hub", "--json"])["state"],
+        booted
+            .record(&["integration", "show", "hub", "--json"])
+            .await["state"],
         "enabled"
     );
 
-    let retired = booted.record(&["integration", "retire", "hub", "--yes", "--json"]);
+    let retired = booted
+        .record(&["integration", "retire", "hub", "--yes", "--json"])
+        .await;
     assert_eq!(retired["state"], "retired");
     assert_eq!(retired["repository"], "jtmthf/kestrel");
     assert!(!retired.to_string().contains(support::PRIVATE_KEY));
 
-    let shown = booted.run(&["integration", "show", "hub"]);
+    let shown = booted.run(&["integration", "show", "hub"]).await;
     assert!(shown.contains("retired"), "{shown}");
     assert!(
         !shown.contains("integration enable"),
         "a retired integration offered a way back:\n{shown}"
     );
-    let refused = booted.refused(&["integration", "enable", "hub"]);
+    let refused = booted.refused(&["integration", "enable", "hub"]).await;
     assert!(refused.contains("retired"), "{refused}");
 }
 
-#[test]
-fn the_client_disables_changes_and_enables_an_integration() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_disables_changes_and_enables_an_integration() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
-    watching(&booted, &stub, "1h");
+    let booted = Booted::playing(Script::Speaks).await;
+    watching(&booted, &stub, "1h").await;
 
-    let disabled = booted.run(&["integration", "disable", "hub"]);
+    let disabled = booted.run(&["integration", "disable", "hub"]).await;
     assert!(disabled.contains("disabled"), "{disabled}");
     assert!(
         disabled.contains("kestrel integration enable hub --organization acme"),
         "the disable named no way to resume:\n{disabled}"
     );
 
-    let changed = booted.record(&[
-        "integration",
-        "change",
-        "hub",
-        "--rename",
-        "github",
-        "--carries",
-        "outbound",
-        "--json",
-    ]);
+    let changed = booted
+        .record(&[
+            "integration",
+            "change",
+            "hub",
+            "--rename",
+            "github",
+            "--carries",
+            "outbound",
+            "--json",
+        ])
+        .await;
     assert_eq!(changed["name"], "github");
     assert_eq!(changed["carries"], serde_json::json!(["outbound"]));
     assert_eq!(changed["state"], "disabled");
     assert_eq!(changed["repository"], "jtmthf/kestrel");
-    let fixed = booted.refused(&[
-        "integration",
-        "change",
-        "github",
-        "--repository",
-        "jtmthf/other",
-    ]);
+    let fixed = booted
+        .refused(&[
+            "integration",
+            "change",
+            "github",
+            "--repository",
+            "jtmthf/other",
+        ])
+        .await;
     assert!(fixed.contains("--repository"), "{fixed}");
 
-    let enabled = booted.record(&["integration", "enable", "github", "--json"]);
-    booted.killed();
+    let enabled = booted
+        .record(&["integration", "enable", "github", "--json"])
+        .await;
+    booted.plane.teardown().await;
 
     assert_eq!(enabled["state"], "enabled");
     assert_eq!(enabled["diagnostic"], Value::Null);
 }
 
-#[test]
-fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_says_it() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_says_it() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
-    watching(&booted, &stub, "1h");
-    let before = booted.record(&["integration", "show", "hub", "--json"]);
+    let booted = Booted::traced().await;
+    watching(&booted, &stub, "1h").await;
+    let before = booted
+        .record(&["integration", "show", "hub", "--json"])
+        .await;
 
     stub.script_answer("POST", "/access_tokens", ScriptedResponse::answering(401));
-    let mut printed = booted.refused_as(
-        &["integration", "github", "replace-key", "hub"],
-        Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
-    );
+    let mut printed = booted
+        .refused_as(
+            &["integration", "github", "replace-key", "hub"],
+            Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
+        )
+        .await;
     assert!(printed.contains("private_key"), "{printed}");
     stub.script_answer("POST", "/access_tokens", ScriptedResponse::answering(502));
-    let unanswered = booted.refused_as(
-        &["integration", "github", "replace-key", "hub"],
-        Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
-    );
+    let unanswered = booted
+        .refused_as(
+            &["integration", "github", "replace-key", "hub"],
+            Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
+        )
+        .await;
     assert!(
         unanswered.contains("kestrel integration github replace-key hub --organization acme"),
         "an outage named no way to try again:\n{unanswered}"
     );
     printed += &unanswered;
     assert_eq!(
-        booted.record(&["integration", "show", "hub", "--json"])["revision"],
+        booted
+            .record(&["integration", "show", "hub", "--json"])
+            .await["revision"],
         before["revision"]
     );
 
@@ -1334,6 +983,7 @@ fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_say
             &["integration", "github", "replace-key", "hub", "--json"],
             Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
         )
+        .await
         .json();
     let from_file = booted
         .client_as(
@@ -1348,11 +998,12 @@ fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_say
             ],
             Invocation::default().file("app.pem", support::PRIVATE_KEY),
         )
+        .await
         .json();
     printed += &format!("{from_input}{from_file}");
-    printed += &booted.run(&["integration", "show", "hub"]);
+    printed += &booted.run(&["integration", "show", "hub"]).await;
     let said = booted.said();
-    booted.killed();
+    booted.plane.teardown().await;
 
     assert!(from_input["revision"].as_i64() > before["revision"].as_i64());
     assert!(from_file["revision"].as_i64() > from_input["revision"].as_i64());
@@ -1367,85 +1018,96 @@ fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_say
     }
 }
 
-#[test]
-fn the_client_starts_reads_and_resumes_a_webhook_secret_rotation_and_never_says_a_secret() {
+#[tokio::test]
+async fn the_client_starts_reads_and_resumes_a_webhook_secret_rotation_and_never_says_a_secret() {
     const FIRST: &str = "the-first-webhook-secret";
-    let kestrel = Kestrel::new();
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
-    booted.run(&["organization", "declare", "acme"]);
-    booted.run(&[
-        "integration",
-        "github",
-        "register",
-        "hub",
-        "--repository",
-        "jtmthf/kestrel",
-        "--app-id",
-        "1",
-        "--installation",
-        "2",
-        "--private-key",
-        support::PRIVATE_KEY,
-        "--webhook-secret",
-        FIRST,
-        "--api",
-        &stub.base_url(),
-        "--interval",
-        "1h",
-    ]);
+    let booted = Booted::traced().await;
+    booted.run(&["organization", "declare", "acme"]).await;
+    booted
+        .run(&[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            support::PRIVATE_KEY,
+            "--webhook-secret",
+            FIRST,
+            "--api",
+            &stub.base_url(),
+            "--interval",
+            "1h",
+        ])
+        .await;
 
     stub.script_answer(
         "PATCH",
         "/app/hook/config",
         ScriptedResponse::answering(502),
     );
-    let mut printed = booted.refused_as(
-        &["integration", "github", "rotate-secret", "start", "hub"],
-        Invocation::default(),
-    );
+    let mut printed = booted
+        .refused_as(
+            &["integration", "github", "rotate-secret", "start", "hub"],
+            Invocation::default(),
+        )
+        .await;
     assert!(
         printed.contains("kestrel integration github rotate-secret resume hub --organization acme"),
         "an unfinished rotation named no way to finish it:\n{printed}"
     );
-    let status = booted.run(&["integration", "github", "rotate-secret", "status", "hub"]);
+    let status = booted
+        .run(&["integration", "github", "rotate-secret", "status", "hub"])
+        .await;
     assert!(status.contains("unfinished since"), "{status}");
     assert!(
         status.contains("kestrel integration github rotate-secret resume hub"),
         "{status}"
     );
     printed += &status;
-    let shown = booted.run(&["integration", "show", "hub"]);
+    let shown = booted.run(&["integration", "show", "hub"]).await;
     assert!(shown.contains("unfinished since"), "{shown}");
     printed += &shown;
-    let unfinished = booted.record(&[
-        "integration",
-        "github",
-        "rotate-secret",
-        "status",
-        "hub",
-        "--json",
-    ]);
+    let unfinished = booted
+        .record(&[
+            "integration",
+            "github",
+            "rotate-secret",
+            "status",
+            "hub",
+            "--json",
+        ])
+        .await;
     assert!(
         unfinished["webhook_secret_rotation"]["started_at"].is_string(),
         "{unfinished}"
     );
     printed += &unfinished.to_string();
 
-    let resumed = booted.record(&[
-        "integration",
-        "github",
-        "rotate-secret",
-        "resume",
-        "hub",
-        "--json",
-    ]);
+    let resumed = booted
+        .record(&[
+            "integration",
+            "github",
+            "rotate-secret",
+            "resume",
+            "hub",
+            "--json",
+        ])
+        .await;
     assert_eq!(resumed["webhook_secret_rotation"], Value::Null);
-    let finished = booted.run(&["integration", "github", "rotate-secret", "status", "hub"]);
+    let finished = booted
+        .run(&["integration", "github", "rotate-secret", "status", "hub"])
+        .await;
     assert!(finished.contains("none under way"), "{finished}");
     printed += &format!("{resumed}{finished}");
     let said = booted.said();
-    booted.killed();
+    booted.plane.teardown().await;
 
     let secrets: Vec<String> = stub
         .requests()
@@ -1474,23 +1136,25 @@ fn the_client_starts_reads_and_resumes_a_webhook_secret_rotation_and_never_says_
 
 /// The one command that has a credential in it, and the whole of what kestrel says while it
 /// uses it: neither the listing an operator reads nor the log they debug from has the token.
-#[test]
-fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_it_nor_a_log() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_it_nor_a_log()
+{
     let stub = GithubStub::start();
     let delivery = stub.deliver(github_stub::labelled(43, "ready-for-agent"));
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
-    watching(&booted, &stub, "1ms");
+    let booted = Booted::traced().await;
+    watching(&booted, &stub, "1ms").await;
 
-    let listed = booted.until(
-        &["event", "list", "--json"],
-        |listed| !listed.is_empty(),
-        "listed an event polled from github",
+    booted.plane.work_pass().await;
+    let listed = booted.records(&["event", "list", "--json"]).await;
+    assert_eq!(
+        listed.len(),
+        1,
+        "the pass should record the delivered Event"
     );
     let said = booted.said();
     let record = listed[0]["record"].as_str().expect("an event record");
-    let shown = booted.record(&["event", "show", record, "--json"]);
-    booted.killed();
+    let shown = booted.record(&["event", "show", record, "--json"]).await;
+    booted.plane.teardown().await;
 
     assert_eq!(shown["record"], record);
     assert_eq!(shown["event"]["id"], delivery);
@@ -1515,73 +1179,85 @@ fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_i
     );
 }
 
-#[test]
-fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
     let stub = GithubStub::start();
     stub.script_answer("GET", "/issues/60", github_stub::issue(60, &[]));
-    let booted = kestrel.boot();
-    declared(&booted);
-    booted.run(&[
-        "integration",
-        "github",
-        "register",
-        "hub",
-        "--repository",
-        "jtmthf/kestrel",
-        "--app-id",
-        "1",
-        "--installation",
-        "2",
-        "--private-key",
-        support::PRIVATE_KEY,
-        "--api",
-        &stub.base_url(),
-        "--carries",
-        "outbound",
-    ]);
-    booted.run(&[
-        "trigger",
-        "declare",
-        "delegated",
-        "--filter",
-        r#"{"exact": {"type": "com.github.issue_comment.created"}}"#,
-        "--brief",
-        "{{ instruction }} {{ event.data.issue.number }}",
-        "--branch",
-        "kestrel/issue-{{ event.data.issue.number }}",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    booted
+        .run(&[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            support::PRIVATE_KEY,
+            "--api",
+            &stub.base_url(),
+            "--carries",
+            "outbound",
+        ])
+        .await;
+    booted
+        .run(&[
+            "trigger",
+            "declare",
+            "delegated",
+            "--filter",
+            r#"{"exact": {"type": "com.github.issue_comment.created"}}"#,
+            "--brief",
+            "{{ instruction }} {{ event.data.issue.number }}",
+            "--branch",
+            "kestrel/issue-{{ event.data.issue.number }}",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
 
-    let tested = booted.record(&[
-        "trigger",
-        "test",
-        "delegated",
-        "--integration",
-        "hub",
-        "--issue",
-        "60",
-        "--instruction",
-        "/tdd the parser",
-        "--json",
-    ]);
-    assert!(booted.records(&["event", "list", "--json"]).is_empty());
+    let tested = booted
+        .record(&[
+            "trigger",
+            "test",
+            "delegated",
+            "--integration",
+            "hub",
+            "--issue",
+            "60",
+            "--instruction",
+            "/tdd the parser",
+            "--json",
+        ])
+        .await;
+    assert!(
+        booted
+            .records(&["event", "list", "--json"])
+            .await
+            .is_empty()
+    );
 
-    let fired = booted.record(&[
-        "trigger",
-        "dispatch",
-        "delegated",
-        "--integration",
-        "hub",
-        "--issue",
-        "60",
-        "--instruction",
-        "/tdd the parser",
-        "--json",
-    ]);
+    let fired = booted
+        .record(&[
+            "trigger",
+            "dispatch",
+            "delegated",
+            "--integration",
+            "hub",
+            "--issue",
+            "60",
+            "--instruction",
+            "/tdd the parser",
+            "--json",
+        ])
+        .await;
 
     assert_eq!(tested["matches"], true, "{tested}");
     assert_eq!(tested["brief"], "/tdd the parser 60", "{tested}");
@@ -1591,7 +1267,9 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
     let workspace = fired["workspace"]
         .as_str()
         .expect("the workspace it opened");
-    let shown = booted.record(&["workspace", "show", workspace, "--json"]);
+    let shown = booted
+        .record(&["workspace", "show", workspace, "--json"])
+        .await;
     assert_eq!(shown["checkout"]["branch"], "kestrel/issue-60");
     for misused in [
         &["trigger", "test", "delegated", "--issue", "60"][..],
@@ -1608,7 +1286,7 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
         ],
     ] {
         assert_eq!(
-            booted.client(misused).status.code(),
+            booted.client(misused).await.status.code(),
             Some(2),
             "`kestrel {}` is a usage error",
             misused.join(" ")
@@ -1625,6 +1303,7 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
                 "--issue",
                 "60",
             ])
+            .await
             .contains("no integration named nowhere"),
     );
 }
@@ -1646,37 +1325,39 @@ triggers:
     agent: builder
 "#;
 
-fn applying(kestrel: &Booted, declarations: &str, flags: &[&str]) -> Finished {
+async fn applying(kestrel: &Booted, declarations: &str, flags: &[&str]) -> Finished {
     let mut args = vec!["trigger", "apply", "-f", "triggers.yaml"];
     args.extend_from_slice(flags);
-    kestrel.client_as(
-        &args,
-        Invocation::default().file("triggers.yaml", declarations),
-    )
+    kestrel
+        .client_as(
+            &args,
+            Invocation::default().file("triggers.yaml", declarations),
+        )
+        .await
 }
 
 /// What it printed, and what it warned of.
-fn applied(kestrel: &Booted, declarations: &str, flags: &[&str]) -> (String, String) {
-    let finished = applying(kestrel, declarations, flags);
+async fn applied(kestrel: &Booted, declarations: &str, flags: &[&str]) -> (String, String) {
+    let finished = applying(kestrel, declarations, flags).await;
     let diff = succeeded(&["trigger", "apply"], &finished);
     (diff, finished.err)
 }
 
-fn trigger_names(kestrel: &Booted) -> Vec<String> {
+async fn trigger_names(kestrel: &Booted) -> Vec<String> {
     kestrel
         .records(&["trigger", "list", "--json"])
+        .await
         .iter()
         .map(|trigger| trigger["name"].as_str().expect("a name").to_owned())
         .collect()
 }
 
-#[test]
-fn apply_prints_the_diff_it_makes_and_nothing_once_it_is_made() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn apply_prints_the_diff_it_makes_and_nothing_once_it_is_made() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
-    let (diff, _) = applied(&booted, APPLIED, &[]);
+    let (diff, _) = applied(&booted, APPLIED, &[]).await;
 
     assert!(diff.contains("+ ready\n"), "{diff}");
     assert!(diff.contains("+ triage\n"), "{diff}");
@@ -1684,34 +1365,35 @@ fn apply_prints_the_diff_it_makes_and_nothing_once_it_is_made() {
         diff.contains("    brief\n      + Work on {{ event.data.issue.title }}\n"),
         "{diff}"
     );
-    assert_eq!(trigger_names(&booted), ["ready", "triage"]);
+    assert_eq!(trigger_names(&booted).await, ["ready", "triage"]);
     assert_eq!(
-        booted.record(&["trigger", "show", "ready", "--json"])["applied"],
+        booted.record(&["trigger", "show", "ready", "--json"]).await["applied"],
         true
     );
 
-    assert_eq!(applied(&booted, APPLIED, &[]).0, "no changes");
+    assert_eq!(applied(&booted, APPLIED, &[]).await.0, "no changes");
 }
 
-#[test]
-fn reapplying_changes_and_removes_only_what_a_file_applied() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    booted.run(&[
-        "trigger",
-        "declare",
-        "one-off",
-        "--filter",
-        r#"{"exact": {"type": "com.example.build.failed"}}"#,
-        "--brief",
-        "Fix the build",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
-    applied(&booted, APPLIED, &[]);
+#[tokio::test]
+async fn reapplying_changes_and_removes_only_what_a_file_applied() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    booted
+        .run(&[
+            "trigger",
+            "declare",
+            "one-off",
+            "--filter",
+            r#"{"exact": {"type": "com.example.build.failed"}}"#,
+            "--brief",
+            "Fix the build",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
+    applied(&booted, APPLIED, &[]).await;
 
     let changed = r#"
 triggers:
@@ -1721,82 +1403,80 @@ triggers:
     project: kestrel
     agent: builder
 "#;
-    let (diff, _) = applied(&booted, changed, &[]);
+    let (diff, _) = applied(&booted, changed, &[]).await;
 
     assert_eq!(
         diff,
         "~ ready\n    brief\n      - Work on {{ event.data.issue.title }}\n      + Work {{ event.data.issue.html_url }}\n- triage"
     );
-    assert_eq!(trigger_names(&booted), ["one-off", "ready"]);
+    assert_eq!(trigger_names(&booted).await, ["one-off", "ready"]);
 }
 
-#[test]
-fn a_one_off_a_file_declares_becomes_the_files() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    booted.run(&[
-        "trigger",
-        "declare",
-        "ready",
-        "--filter",
-        r#"{"exact": {"type": "com.github.issues.labeled"}}"#,
-        "--brief",
-        "Work on {{ event.data.issue.title }}",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
+#[tokio::test]
+async fn a_one_off_a_file_declares_becomes_the_files() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    booted
+        .run(&[
+            "trigger",
+            "declare",
+            "ready",
+            "--filter",
+            r#"{"exact": {"type": "com.github.issues.labeled"}}"#,
+            "--brief",
+            "Work on {{ event.data.issue.title }}",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
 
-    let (diff, _) = applied(&booted, APPLIED, &[]);
+    let (diff, _) = applied(&booted, APPLIED, &[]).await;
 
     assert!(
         diff.contains("~ ready\n    declared by\n      - flags\n      + a file\n"),
         "{diff}"
     );
-    applied(&booted, "triggers: {}", &[]);
-    assert!(trigger_names(&booted).is_empty());
+    applied(&booted, "triggers: {}", &[]).await;
+    assert!(trigger_names(&booted).await.is_empty());
 }
 
-#[test]
-fn a_dry_run_prints_the_diff_and_changes_nothing() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn a_dry_run_prints_the_diff_and_changes_nothing() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
-    let (diff, warned) = applied(&booted, APPLIED, &["--dry-run"]);
+    let (diff, warned) = applied(&booted, APPLIED, &["--dry-run"]).await;
 
     assert!(diff.contains("+ ready\n"), "{diff}");
-    assert!(trigger_names(&booted).is_empty());
+    assert!(trigger_names(&booted).await.is_empty());
     assert!(warned.contains("the trigger ready fires"), "{warned}");
     assert!(warned.contains("0.4"), "{warned}");
     assert!(!warned.contains("the trigger triage"), "{warned}");
 }
 
-#[test]
-fn an_apply_that_cannot_be_made_whole_changes_nothing() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn an_apply_that_cannot_be_made_whole_changes_nothing() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
     let naming_a_stranger = format!(
         "{APPLIED}  stranger:\n    filter: {{exact: {{type: x}}}}\n    brief: x\n    project: kestrel\n    agent: nobody\n"
     );
 
     let refusal = refusal(
         &["trigger", "apply"],
-        &applying(&booted, &naming_a_stranger, &[]),
+        &applying(&booted, &naming_a_stranger, &[]).await,
     );
 
     assert!(refusal.contains("nobody"), "{refusal}");
-    assert!(trigger_names(&booted).is_empty());
+    assert!(trigger_names(&booted).await.is_empty());
 }
 
-#[test]
-fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
     for (declarations, because) in [
         ("", "triggers"),
@@ -1817,7 +1497,10 @@ fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
             "triggers.ready: unknown field `agnet`",
         ),
     ] {
-        let said = refusal(&["trigger", "apply"], &applying(&booted, declarations, &[]));
+        let said = refusal(
+            &["trigger", "apply"],
+            &applying(&booted, declarations, &[]).await,
+        );
         assert!(
             said.contains(because),
             "{declarations:?} was refused unhelpfully: {said}"
@@ -1825,46 +1508,51 @@ fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
     }
 }
 
-#[test]
-fn apply_reads_a_declaration_file_from_standard_input() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn apply_reads_a_declaration_file_from_standard_input() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
-    booted.run_as(
-        &["trigger", "apply", "-f", "-"],
-        Invocation::default().given(APPLIED),
-    );
+    booted
+        .run_as(
+            &["trigger", "apply", "-f", "-"],
+            Invocation::default().given(APPLIED),
+        )
+        .await;
 
-    assert_eq!(trigger_names(&booted), ["ready", "triage"]);
+    assert_eq!(trigger_names(&booted).await, ["ready", "triage"]);
 }
 
-#[test]
-fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::labelled(43, "ready-for-agent"));
-    let booted = kestrel.boot();
-    declared(&booted);
-    watching(&booted, &stub, "1ms");
-    booted.run(&[
-        "trigger",
-        "declare",
-        "ready",
-        "--filter",
-        r#"{"exact": {"type": "com.github.issues.opened"}}"#,
-        "--brief",
-        "as applied",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
-    let event = booted.until(
-        &["event", "list", "--json"],
-        |listed| !listed.is_empty(),
-        "listed an event polled from github",
-    )[0]["record"]
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    watching(&booted, &stub, "1ms").await;
+    booted
+        .run(&[
+            "trigger",
+            "declare",
+            "ready",
+            "--filter",
+            r#"{"exact": {"type": "com.github.issues.opened"}}"#,
+            "--brief",
+            "as applied",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
+    booted.plane.work_pass().await;
+    let events = booted.records(&["event", "list", "--json"]).await;
+    assert_eq!(
+        events.len(),
+        1,
+        "the pass should record the delivered Event"
+    );
+    let event = events[0]["record"]
         .as_str()
         .expect("an event record")
         .to_owned();
@@ -1888,12 +1576,15 @@ fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
                 .file("triggers.yaml", declaring)
                 .file("instruction.md", "/triage"),
         )
+        .await
         .json();
 
     assert_eq!(tested["matches"], true, "{tested}");
     assert_eq!(tested["brief"], "/triage #43", "{tested}");
     assert_eq!(
-        booted.record(&["trigger", "test", "ready", "--event", &event, "--json"])["matches"],
+        booted
+            .record(&["trigger", "test", "ready", "--event", &event, "--json"])
+            .await["matches"],
         false
     );
     assert!(
@@ -1910,40 +1601,42 @@ fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
                 ],
                 Invocation::default().file("triggers.yaml", declaring),
             )
+            .await
             .contains("declares no trigger elsewhere"),
     );
 }
 
-#[test]
-fn a_brief_and_a_filter_are_read_from_a_file_or_standard_input() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn a_brief_and_a_filter_are_read_from_a_file_or_standard_input() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
-    let finished = booted.client_as(
-        &[
-            "trigger",
-            "declare",
-            "ready",
-            "--filter",
-            "-",
-            "--brief",
-            "@brief.md",
-            "--project",
-            "kestrel",
-            "--agent",
-            "builder",
-        ],
-        Invocation::default()
-            .given(r#"{"exact": {"type": "com.github.issues.labeled"}}"#)
-            .file(
-                "brief.md",
-                "Work on {{ event.data.issue.title }}\n\nand say so.\n",
-            ),
-    );
+    let finished = booted
+        .client_as(
+            &[
+                "trigger",
+                "declare",
+                "ready",
+                "--filter",
+                "-",
+                "--brief",
+                "@brief.md",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+            ],
+            Invocation::default()
+                .given(r#"{"exact": {"type": "com.github.issues.labeled"}}"#)
+                .file(
+                    "brief.md",
+                    "Work on {{ event.data.issue.title }}\n\nand say so.\n",
+                ),
+        )
+        .await;
     succeeded(&["trigger", "declare"], &finished);
 
-    let shown = booted.record(&["trigger", "show", "ready", "--json"]);
+    let shown = booted.record(&["trigger", "show", "ready", "--json"]).await;
     assert_eq!(
         shown["filter"],
         serde_json::json!({ "exact": { "type": "com.github.issues.labeled" } })
@@ -1961,61 +1654,67 @@ fn a_brief_and_a_filter_are_read_from_a_file_or_standard_input() {
     );
 }
 
-#[test]
-fn only_one_of_a_filter_and_a_brief_is_read_from_standard_input() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
+#[tokio::test]
+async fn only_one_of_a_filter_and_a_brief_is_read_from_standard_input() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
 
-    let refusal = booted.refused(&[
-        "trigger",
-        "declare",
-        "ready",
-        "--filter",
-        "-",
-        "--brief",
-        "-",
-        "--project",
-        "kestrel",
-        "--agent",
-        "builder",
-    ]);
+    let refusal = booted
+        .refused(&[
+            "trigger",
+            "declare",
+            "ready",
+            "--filter",
+            "-",
+            "--brief",
+            "-",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+        ])
+        .await;
 
     assert!(refusal.contains("standard input"), "{refusal}");
 }
 
-#[test]
-fn transcript_kinds_select_the_entries_the_client_streams() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
-    declared(&booted);
-    let workspace = opened(&booted);
-    booted.run(&[
-        "workspace",
-        "post",
-        &workspace,
-        "--as-participant",
-        "operator",
-        "go",
-    ]);
-    dispatched(&booted, &workspace);
-    let shared = booted.records(&[
-        "workspace",
-        "transcript",
-        &workspace,
-        "--no-summaries",
-        "--json",
-    ]);
+#[tokio::test]
+async fn transcript_kinds_select_the_entries_the_client_streams() {
+    let booted = Booted::playing(Script::Speaks).await;
+    declared(&booted).await;
+    let workspace = opened(&booted).await;
+    booted
+        .run(&[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "go",
+        ])
+        .await;
+    dispatched(&booted, &workspace).await;
+    let shared = booted
+        .records(&[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--no-summaries",
+            "--json",
+        ])
+        .await;
     assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
-    let narration = booted.records(&[
-        "workspace",
-        "transcript",
-        &workspace,
-        "--kinds",
-        "narration",
-        "--no-summaries",
-        "--json",
-    ]);
+    let narration = booted
+        .records(&[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--kinds",
+            "narration",
+            "--no-summaries",
+            "--json",
+        ])
+        .await;
     assert_eq!(narration.len(), 2);
     assert_eq!(narration[0]["entry"]["type"], "plan");
     assert_eq!(narration[1]["entry"]["type"], "thought");
@@ -2024,15 +1723,17 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
             .iter()
             .all(|record| record["kind"] == "narration" && record["session_id"].is_string())
     );
-    let all = booted.records(&[
-        "workspace",
-        "transcript",
-        &workspace,
-        "--kinds",
-        "narration,shared_state",
-        "--no-summaries",
-        "--json",
-    ]);
+    let all = booted
+        .records(&[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--kinds",
+            "narration,shared_state",
+            "--no-summaries",
+            "--json",
+        ])
+        .await;
     assert_eq!(all.len(), shared.len() + narration.len());
     assert!(
         all.windows(2)
@@ -2040,12 +1741,11 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
     );
 }
 
-#[test]
-fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
-    let kestrel = Kestrel::new();
-    let booted = kestrel.boot();
+#[tokio::test]
+async fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
+    let booted = Booted::playing(Script::Speaks).await;
     let args = ["organization", "list"];
-    let shown = client::ran_on_a_terminal(&booted.operator, &args, 120, "");
+    let shown = booted.terminal(&args).await;
     assert!(shown.status.success(), "{}", shown.said);
     assert!(shown.said.contains("No Organizations."), "{}", shown.said);
     assert!(
@@ -2053,16 +1753,11 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
         "{}",
         shown.said
     );
-    assert!(booted.client(&args).out.is_empty());
-    let json = client::ran_on_a_terminal(
-        &booted.operator,
-        &["organization", "list", "--json"],
-        120,
-        "",
-    );
+    assert!(booted.client(&args).await.out.is_empty());
+    let json = booted.terminal(&["organization", "list", "--json"]).await;
     assert!(json.status.success(), "{}", json.said);
     assert!(!json.said.contains("No Organizations"), "{}", json.said);
-    booted.run(&["organization", "declare", "acme"]);
+    booted.run(&["organization", "declare", "acme"]).await;
     for (command, absent, action) in [
         ("project", "Projects", "project declare --help"),
         ("agent", "Agents", "agent declare --help"),
@@ -2083,7 +1778,7 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
         ("instance", "Instances", "workspace list"),
     ] {
         let args = ["--organization", "acme", command, "list"];
-        let shown = client::ran_on_a_terminal(&booted.operator, &args, 120, "");
+        let shown = booted.terminal(&args).await;
         assert!(shown.status.success(), "{}", shown.said);
         assert!(
             shown
@@ -2099,7 +1794,7 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
             "{}",
             shown.said
         );
-        let piped = booted.client(&args);
+        let piped = booted.client(&args).await;
         assert!(piped.status.success(), "{}", piped.err);
         assert!(piped.out.is_empty(), "{:?}", piped.out);
         assert!(piped.err.is_empty(), "{}", piped.err);
@@ -2228,47 +1923,50 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
     serving.join().expect("the stub served every read");
 }
 
-#[test]
-fn the_client_sets_a_hook_url_and_reads_safe_delivery_results() {
-    let kestrel = Kestrel::new();
+#[tokio::test]
+async fn the_client_sets_a_hook_url_and_reads_safe_delivery_results() {
     let stub = GithubStub::start();
-    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
-    booted.run(&["organization", "declare", "acme"]);
-    booted.run(&[
-        "integration",
-        "github",
-        "register",
-        "hub",
-        "--repository",
-        "jtmthf/kestrel",
-        "--app-id",
-        "1",
-        "--installation",
-        "2",
-        "--private-key",
-        support::PRIVATE_KEY,
-        "--webhook-secret",
-        "kept-secret",
-        "--api",
-        &stub.base_url(),
-        "--interval",
-        "1h",
-    ]);
+    let booted = Booted::traced().await;
+    booted.run(&["organization", "declare", "acme"]).await;
+    booted
+        .run(&[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            support::PRIVATE_KEY,
+            "--webhook-secret",
+            "kept-secret",
+            "--api",
+            &stub.base_url(),
+            "--interval",
+            "1h",
+        ])
+        .await;
     stub.script_answer(
         "PATCH",
         "/app/hook/config",
         ScriptedResponse::answering(200),
     );
-    let changed = booted.record(&[
-        "integration",
-        "github",
-        "webhook",
-        "set-url",
-        "hub",
-        "--base",
-        "https://hooks.example.com",
-        "--json",
-    ]);
+    let changed = booted
+        .record(&[
+            "integration",
+            "github",
+            "webhook",
+            "set-url",
+            "hub",
+            "--base",
+            "https://hooks.example.com",
+            "--json",
+        ])
+        .await;
     assert_eq!(changed["revision"], 2);
     stub.script_answer(
         "GET",
@@ -2277,33 +1975,37 @@ fn the_client_sets_a_hook_url_and_reads_safe_delivery_results() {
             r#"{"url":"https://hooks.example.com/webhooks/id","secret":"never-print-this"}"#,
         ),
     );
-    let status = booted.record(&[
-        "integration",
-        "github",
-        "webhook",
-        "status",
-        "hub",
-        "--json",
-    ]);
+    let status = booted
+        .record(&[
+            "integration",
+            "github",
+            "webhook",
+            "status",
+            "hub",
+            "--json",
+        ])
+        .await;
     assert_eq!(
         status,
         json!({"url":"https://hooks.example.com/webhooks/id","deliveries":[],"pending_url":null})
     );
-    let refused = booted.refused_as(
-        &[
-            "integration",
-            "github",
-            "webhook",
-            "set-url",
-            "hub",
-            "--base",
-            "https://localhost",
-        ],
-        Invocation::default(),
-    );
+    let refused = booted
+        .refused_as(
+            &[
+                "integration",
+                "github",
+                "webhook",
+                "set-url",
+                "hub",
+                "--base",
+                "https://localhost",
+            ],
+            Invocation::default(),
+        )
+        .await;
     assert!(refused.contains("public HTTPS origin"), "{refused}");
     let printed = format!("{changed}{status}{refused}{}", booted.said());
     assert!(!printed.contains("kept-secret"));
     assert!(!printed.contains("never-print-this"));
-    booted.killed();
+    booted.plane.teardown().await;
 }

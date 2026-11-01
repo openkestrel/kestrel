@@ -1,23 +1,35 @@
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use tracing_subscriber::prelude::*;
+
 use kestrel::domain::SessionId;
+
+static TRACE_CAPTURES: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Default)]
 pub struct OperatorLog(Arc<Mutex<Vec<u8>>>);
 
-/// One per test binary, because a tracing subscriber is global: every test in it shares it, and
-/// reads only the lines that name its own Session.
+/// SQLite worker threads need the same subscriber as the runtime tasks that issue their queries.
 pub fn capturing() -> &'static OperatorLog {
     static LOG: OnceLock<OperatorLog> = OnceLock::new();
 
     LOG.get_or_init(|| {
         let log = OperatorLog::default();
         let writing = log.clone();
-        tracing_subscriber::fmt()
-            .with_env_filter("info")
-            .with_ansi(false)
-            .with_writer(move || writing.clone())
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(move || writing.clone())
+                    .with_filter(tracing_subscriber::filter::dynamic_filter_fn(
+                        |metadata, _| {
+                            *metadata.level() <= tracing::Level::INFO
+                                || TRACE_CAPTURES.load(Ordering::Relaxed) > 0
+                        },
+                    )),
+            )
             .init();
 
         log
@@ -56,5 +68,30 @@ impl io::Write for OperatorLog {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+pub fn capturing_trace() -> Trace {
+    let log = capturing();
+    let from = log.0.lock().expect("the log should not be poisoned").len();
+    TRACE_CAPTURES.fetch_add(1, Ordering::Relaxed);
+    Trace { log, from }
+}
+
+pub struct Trace {
+    log: &'static OperatorLog,
+    from: usize,
+}
+
+impl Trace {
+    pub fn said(&self) -> String {
+        let log = self.log.0.lock().expect("the log should not be poisoned");
+        String::from_utf8_lossy(&log[self.from..]).into_owned()
+    }
+}
+
+impl Drop for Trace {
+    fn drop(&mut self) {
+        TRACE_CAPTURES.fetch_sub(1, Ordering::Relaxed);
     }
 }
