@@ -85,6 +85,10 @@ struct Client {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Include the complete typed diagnostic on stderr, without a transport error chain
+    #[arg(long, global = true)]
+    verbose: bool,
+
     /// Filter the complete JSON response through a jq expression, as jaq implements it. A
     /// string result prints raw and any other result as JSON, one a line; no results is success
     #[arg(long, global = true, value_name = "EXPR", value_parser = NonEmptyStringValueParser::new())]
@@ -111,6 +115,7 @@ async fn normal() -> ExitCode {
                 .unwrap_or_default(),
             args: args.clone(),
             json: true,
+            verbose: false,
         };
         let refused = Failed::new(
             Exit::Usage,
@@ -133,6 +138,7 @@ async fn normal() -> ExitCode {
         operation: operation(&matches),
         args,
         json: client.json || client.jq.is_some(),
+        verbose: client.verbose,
     };
     // A malformed filter is refused here, before any consumer can read or change anything.
     let filter = match client.jq.as_deref().map(filter::Filter::compile) {

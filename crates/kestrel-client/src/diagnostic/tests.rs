@@ -21,6 +21,7 @@ pub fn invocation() -> Invocation {
         .map(str::to_owned)
         .to_vec(),
         json: false,
+        verbose: false,
     }
 }
 

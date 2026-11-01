@@ -16,7 +16,7 @@ async fn status_leads_with_the_configured_client_and_counts_empty_scoped_work() 
         piped.out
     );
     assert!(piped.err.contains("kestrel operator name"), "{}", piped.err);
-    let terminal = ran_on_a_terminal_by(&kestrel, &args, Invocation::default(), "").await;
+    let terminal = ran_on_a_terminal_by(&kestrel, &args, Invocation::default().given(""), "").await;
     assert_eq!(terminal.status.code(), Some(78));
     assert!(terminal.said.contains("http://localhost:7800"));
     let read = ran_by(
@@ -164,6 +164,14 @@ async fn status_counts_all_sessions_in_scope_and_failed_work_does_not_fail_the_r
     kestrel.after_one_turn(session.id).await;
     let second = kestrel.enqueue_session(workspace.id).await;
     kestrel.after_one_turn(second.id).await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .hold_provider_credential(
+            &organization,
+            "ANTHROPIC_API_KEY",
+            "sk-ant-api03-status-test",
+        )
+        .await;
     Fixture::acme().organization("globex").open(&kestrel).await;
     let read = ran_by(
         &kestrel,
@@ -222,9 +230,13 @@ async fn status_exits_unavailable_when_readiness_cannot_be_inspected() {
     use crate::support::fixture::Fixture;
     let kestrel = Kestrel::boot_inspecting("kestrel-env:no-status-image").await;
     kestrel.name_operator("acme").await;
-    Fixture::acme()
-        .holding_a_provider_key()
-        .declare(&kestrel)
+    let organization = Fixture::acme().declare(&kestrel).await;
+    kestrel
+        .hold_provider_credential(
+            &organization,
+            "ANTHROPIC_API_KEY",
+            "sk-ant-api03-status-test",
+        )
         .await;
     let read = ran_by(&kestrel, &["status", "--json"], Invocation::default()).await;
     assert_eq!(read.status.code(), Some(5), "{}", read.err);

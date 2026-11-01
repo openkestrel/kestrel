@@ -209,6 +209,7 @@ mod tests {
             operation: String::new(),
             args: Vec::new(),
             json: false,
+            verbose: false,
         }
     }
 
