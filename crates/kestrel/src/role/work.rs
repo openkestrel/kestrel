@@ -24,6 +24,9 @@ use crate::timer;
 use crate::work;
 use crate::workspace;
 
+mod startup;
+pub use startup::StartupCheckpoint;
+
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
 /// `Store` again rather than by being told.
 const POLL: Duration = Duration::from_millis(100);
@@ -86,13 +89,38 @@ enum Held {
 /// The supervisors this process started, by Instance. A restart starts with none held, and finds
 /// the ones still running by what they last reported.
 #[derive(Clone, Default)]
-struct Supervisors(Arc<Mutex<HashMap<String, Supervisor>>>);
+struct Supervisors {
+    held: Arc<Mutex<HashMap<String, Supervisor>>>,
+    startup: Arc<Mutex<Option<startup::Pause>>>,
+}
 
 impl Supervisors {
     fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, Supervisor>> {
-        self.0
+        self.held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn pause_startup(&self) -> StartupCheckpoint {
+        let checkpoint = StartupCheckpoint::new();
+        let mut startup = self
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(startup.is_none(), "a supervisor startup is already paused");
+        *startup = Some(checkpoint.pause());
+        checkpoint
+    }
+
+    async fn startup_checkpoint(&self) {
+        let pause = self
+            .startup
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(pause) = pause {
+            pause.wait().await;
+        }
     }
 
     fn held_on(&self, instance: &str) -> Held {
@@ -165,6 +193,10 @@ pub async fn run(
 }
 
 impl Work {
+    pub fn pause_supervisor_startup(&self) -> StartupCheckpoint {
+        self.dispatcher.supervisors.pause_startup()
+    }
+
     pub async fn start(
         store: Store,
         dispatch: Option<Dispatch>,
@@ -592,6 +624,7 @@ async fn supervised(
     }
     // The exit watcher must not see a supervisor before its Session records it.
     supervisors.held().insert(name, supervisor);
+    supervisors.startup_checkpoint().await;
 
     Ok(())
 }

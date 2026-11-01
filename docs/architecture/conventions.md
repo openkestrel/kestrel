@@ -77,6 +77,10 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   has yet to get one, idle hints are a no-op in both drivers, and a sign-in test's only rival is a
   restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
   expires its own flow first. Stepping is opt-in until most of `suite` has moved.
+- **A startup checkpoint holds one execution while the live loops continue.** Arm
+  `pause_supervisor_startup` on a stepped fixture before `go_live`, wait for the checkpoint to be
+  reached after a new supervisor is published, and drop it to resume startup. This exposes the
+  exit-watching race inside startup that a completed `work_pass` cannot interleave.
 - **A test that must raise no notice asks the hub, it does not wait it out.** Delivery waits a
   coalescing window the test cannot move, so `notices_raised`, sampled around the step, says
   whether the write raised one, and `notices_settled` is what lets a stream opened next hear only
