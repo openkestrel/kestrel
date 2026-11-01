@@ -41,10 +41,12 @@ impl Surroundings {
 }
 
 pub(super) enum Reach {
-    /// A browser here can open the URL.
     Here,
     /// The browser is elsewhere; `known` is false when the destination is a placeholder.
-    Tunnel { command: String, known: bool },
+    Tunnel {
+        command: String,
+        known: bool,
+    },
 }
 
 pub(super) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
@@ -73,8 +75,6 @@ pub(super) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
     }
 }
 
-/// Tells how to reach the setup URL, which is always printed on a line of its own to copy, and
-/// opens it when a browser here can.
 pub(super) fn shown(url: &str, reach: &Reach, interactive: bool) {
     match reach {
         Reach::Here => {

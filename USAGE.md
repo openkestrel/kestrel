@@ -61,10 +61,10 @@ docker compose --env-file compose.source.env up -d
 After creating an organization (for example with `kestrel operator name`), run:
 
 ```sh
-kestrel integration github connect origin --repository OWNER/NAME
+kestrel integration github connect origin
 ```
 
-The name defaults to `github`. For a repository owned by a GitHub organization, add `--app-organization OWNER` so the private App belongs to that organization. You need permission to create and install Apps there.
+The name defaults to `github`. Add `--repository OWNER/NAME` to connect that repository from the terminal once the App is installed. For a repository owned by a GitHub organization, add `--app-organization OWNER` so the private App belongs to that organization. You need permission to create and install Apps there.
 
 The command prints the setup URL on a line of its own and, at a terminal with a display, opens it (`BROWSER` names another opener). In the browser, click **Create GitHub App**, confirm its name on GitHub, then follow the installation link and grant access to the repositories you want to choose from. GitHub returns you to Kestrel, which verifies that the installation belongs to the created App. With `--repository` the command connects that repository as soon as the App is installed; without it, choose one in the browser. Installation alone grants no work authority. The command waits on the setup itself and prints `GitHub connected · Integration … · Organization … · repository …` to stdout (`--json` prints the whole setup record); progress, the URL and errors go to stderr, and it never asks for input. You never download or paste the private key; Kestrel seals it and the generated webhook secret beside its database.
 

@@ -46,7 +46,6 @@ async fn flow_from(client: Client) -> (Client, String) {
     (client, flow)
 }
 
-/// GitHub converts the manifest and the App is installed, as a browser would have it.
 async fn installed(kestrel: &Kestrel, stub: &GithubStub, flow: &str) {
     stub.script_answer(
         "POST",

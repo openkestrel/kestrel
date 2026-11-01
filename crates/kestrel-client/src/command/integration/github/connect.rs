@@ -149,9 +149,10 @@ async fn waited(
     repository: Option<&str>,
 ) -> Result<wire::GithubAppFlow> {
     use wire::GithubAppFlowPhase as P;
-    let path = ["github-app", "flows", read.flow.as_str()].map(str::to_owned);
-    let path: Vec<&str> = path.iter().map(String::as_str).collect();
-    let finish = [path.as_slice(), &["finish"]].concat();
+    let flow_id = read.flow.clone();
+    let path = ["github-app", "flows", flow_id.as_str()];
+    let finish = ["github-app", "flows", flow_id.as_str(), "finish"];
+    let mut finished = false;
     let mut said = HashSet::new();
     let mut first = |phase: &'static str| said.insert(phase);
     let mut lost = false;
@@ -187,6 +188,7 @@ async fn waited(
                 }
             }
             P::SelectRepository => match repository {
+                Some(_) if finished => {}
                 Some(repository) => {
                     if first("finishing") {
                         eprintln!("The App is installed. Connecting {repository}…");
@@ -195,10 +197,20 @@ async fn waited(
                         repository: repository.to_owned(),
                     };
                     match api.post_as::<wire::GithubAppFlow>(&finish, &chosen).await {
-                        Ok(done) if done.phase == P::Completed => return Ok(done),
-                        Ok(_) => {}
+                        Ok(done) => {
+                            finished = true;
+                            read = Some(done);
+                            continue;
+                        }
                         Err(error) if transient(&error) => {}
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            eprintln!(
+                                "The setup stays open until {}: choose a repository in the \
+                                 browser, or resume with another --repository.",
+                                flow.expires_at
+                            );
+                            return Err(error);
+                        }
                     }
                 }
                 None => {
