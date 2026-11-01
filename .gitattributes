@@ -111,8 +111,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel/tests/suite/relay.rs token-budget-exempt=807
 
-/crates/kestrel/tests/suite/replies.rs token-budget-exempt=845
-
 /crates/kestrel/tests/suite/stream.rs token-budget-exempt=821
 
 /crates/kestrel/tests/suite/trailing.rs token-budget-exempt=794
