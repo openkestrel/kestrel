@@ -416,8 +416,10 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
                 Some(a.organization.clone()),
             )
         }
-        A::ConnectGithubAction(_) => Step::said(
+        A::ConnectGithubAction(a) => Step::run(
             "connect a repository through a GitHub App, which is what lets a Session push",
+            given(&["integration", "github", "connect"]),
+            a.organization.clone(),
         ),
         A::EnableIntegrationAction(a) => Step::run(
             format!("enable the Integration {}", a.integration),

@@ -1,3 +1,6 @@
+mod connect;
+mod reach;
+
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use kestrel_operator_types as wire;
@@ -13,7 +16,9 @@ use crate::{typed, view};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GithubCommand {
-    /// Register a connection to GitHub, watching one repository
+    /// Create a GitHub App through the browser and connect one repository it is installed on
+    Connect(connect::Connect),
+    /// Register an existing GitHub App's installation, watching one repository
     Register {
         /// The name it is referred to by
         name: String,
@@ -115,9 +120,21 @@ pub(super) async fn run(running: Running<'_>, command: GithubCommand) -> Result<
         presentation,
         scoping,
         invocation,
-        ..
+        control_plane,
+        url,
     } = running;
     match command {
+        GithubCommand::Connect(connect) => {
+            let running = Running {
+                api,
+                presentation,
+                scoping,
+                invocation,
+                control_plane,
+                url,
+            };
+            connect::run(running, connect).await?;
+        }
         GithubCommand::Register {
             name,
             repository,

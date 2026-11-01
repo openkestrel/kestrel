@@ -517,24 +517,6 @@ async fn an_integration_and_the_refusal_inside_it_are_shown_three_ways() {
         disabled.out[0]
     );
 
-    let started = piped(
-        &kestrel,
-        &["integration", "create-github-app", "my-app", "--json"],
-    )
-    .await
-    .json();
-    let url = started["url"].as_str().expect("a url");
-    let flow = started["flow"].as_str().expect("a flow");
-    assert!(url.contains("/operator/github-app/setup?"), "{url}");
-    assert!(url.ends_with(&format!("state={flow}")), "{url}");
-    let piped_url = piped(&kestrel, &["integration", "create-github-app", "my-app"]).await;
-    assert_eq!(piped_url.out.len(), 1, "{:?}", piped_url.out);
-    assert!(
-        piped_url.out[0].contains("/operator/github-app/setup?state="),
-        "{:?}",
-        piped_url.out
-    );
-
     kestrel.teardown().await;
 }
 
