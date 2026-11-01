@@ -6,6 +6,7 @@ mod input;
 pub(crate) mod instance;
 pub(crate) mod integration;
 pub(crate) mod login;
+pub(crate) mod open;
 pub(crate) mod operator;
 pub(crate) mod organization;
 pub(crate) mod profile;
@@ -96,9 +97,13 @@ pub(crate) enum Command {
     Instance(InstanceCommand),
     /// Read the queue: the limits, one row per occupant with its phase, and one per queued Session
     Queue,
-    /// Print the resolved scope, where each value came from, what exists in it, and what to
-    /// session next
+    /// Show the Client URL, readiness and scoped Workspace and Session counts
     Status,
+    /// Open the Client at a Workspace, the latest Workspace, or the root when none exists
+    Open {
+        /// A Workspace name, identifier, unambiguous identifier prefix, or `latest`
+        workspace: Option<String>,
+    },
     /// Print every exit code, what it means, and when a script should branch on it
     ExitCodes,
     /// Generate shell integration for dynamic completion of commands, flags and scoped names
@@ -125,7 +130,8 @@ impl Command {
             | Command::Session(_)
             | Command::Instance(_)
             | Command::Queue
-            | Command::Status => true,
+            | Command::Status
+            | Command::Open { .. } => true,
             Command::Operator(_)
             | Command::Organization(_)
             | Command::ExitCodes

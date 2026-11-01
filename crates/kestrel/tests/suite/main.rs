@@ -97,6 +97,7 @@ mod sign_in_test_cli;
 mod start;
 mod start_preview;
 mod startup_store;
+mod status_open;
 mod stepped;
 mod stream;
 mod trailing;

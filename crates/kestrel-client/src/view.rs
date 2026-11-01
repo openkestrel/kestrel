@@ -521,26 +521,12 @@ pub const INSTANCES: Columns<wire::HeldInstance> = Columns::Rows(&[
 pub const RELEASED: Columns<wire::ReleasedInstance> =
     Columns::Value(Column("instance", |record| text(&record.instance)));
 pub const STATUS: Columns<crate::Status> = Columns::Detail(&[
-    Column("control plane", |record| {
-        text(&record.location.control_plane)
+    Column("Client", |record| text(&record.client_url)),
+    Column("readiness", |record| text(&record.readiness.outcome)),
+    Column("Workspaces by state", |record| {
+        counts(&record.workspace_counts)
     }),
-    Column("control plane source", |record| {
-        text(&record.location.control_plane_source)
-    }),
-    Column("organization", |record| text(&record.organization)),
-    Column("organization source", |record| {
-        text(&record.organization_source)
-    }),
-    Column("projects", |record| text(record.projects)),
-    Column("agents", |record| text(record.agents)),
-    Column("triggers", |record| text(record.triggers)),
-    Column("workspaces", |record| text(record.workspaces)),
-    Column("integrations", |record| text(record.integrations)),
-    Column("credentials", |record| text(record.credentials)),
-    Column("profiles", |record| text(record.profiles)),
-    Column("next", |record| text(&record.next)),
-]);
-pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
+    Column("Sessions by state", |record| counts(&record.session_counts)),
     Column("control plane", |record| {
         text(&record.location.control_plane)
     }),
@@ -553,8 +539,13 @@ pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
     Column("organization source", |record| {
         or_absent(record.organization_source.as_ref())
     }),
-    Column("organizations", |record| joined(&record.organizations)),
-    Column("next", |record| text(&record.next)),
+    Column("projects", |record| text(record.projects)),
+    Column("agents", |record| text(record.agents)),
+    Column("triggers", |record| text(record.triggers)),
+    Column("workspaces", |record| text(record.workspaces)),
+    Column("integrations", |record| text(record.integrations)),
+    Column("credentials", |record| text(record.credentials)),
+    Column("profiles", |record| text(record.profiles)),
 ]);
 pub const EXIT_CODES: Columns<crate::exit::Record> = Columns::Detail(&[
     Column("code", |record| text(record.code)),
@@ -702,4 +693,12 @@ mod tests {
         }));
         assert_eq!(said(&ignored), format!("ignored\t-\t-\t{EVENT}\tissue-1\n"));
     }
+}
+
+fn counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(state, count)| format!("{state}: {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

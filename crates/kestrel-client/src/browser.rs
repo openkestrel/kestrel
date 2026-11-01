@@ -1,6 +1,3 @@
-//! How a browser reaches the Client origin a GitHub App setup URL names: opened here, or over
-//! an SSH tunnel from the machine the person types on.
-
 use std::process::{Command, Stdio};
 
 use reqwest::Url;
@@ -10,7 +7,7 @@ use crate::shell::quoted;
 const TEMPLATE: &str = "<ssh-destination>";
 
 /// What is known of where the person is, read once from the environment.
-pub(super) struct Surroundings {
+pub(crate) struct Surroundings {
     ssh: bool,
     /// `SSH_CONNECTION`'s server address and port: where the person's ssh connected to.
     server: Option<(String, u16)>,
@@ -19,7 +16,7 @@ pub(super) struct Surroundings {
 }
 
 impl Surroundings {
-    pub(super) fn read() -> Self {
+    pub(crate) fn read() -> Self {
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
         let server = std::env::var("SSH_CONNECTION").ok().and_then(|connection| {
             let fields: Vec<&str> = connection.split_whitespace().collect();
@@ -40,7 +37,7 @@ impl Surroundings {
     }
 }
 
-pub(super) enum Reach {
+pub(crate) enum Reach {
     Here,
     /// The browser is elsewhere; `known` is false when the destination is a placeholder.
     Tunnel {
@@ -49,33 +46,38 @@ pub(super) enum Reach {
     },
 }
 
-pub(super) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
+pub(crate) fn reach(surroundings: &Surroundings, client: &Url) -> Reach {
     if !surroundings.ssh && surroundings.display {
         return Reach::Here;
     }
     let port = client.port_or_known_default().unwrap_or(80);
     let host = client.host_str().unwrap_or("localhost");
-    let destination = match (&surroundings.server, &surroundings.user) {
-        (Some((address, port)), Some(user)) if surroundings.ssh => {
-            let at = format!("{}@{address}", quoted(user));
-            Some(if *port == 22 {
-                at
-            } else {
-                format!("-p {port} {at}")
-            })
+    let (destination, known) = match (&surroundings.server, &surroundings.user) {
+        (Some((address, port)), user) if surroundings.ssh => {
+            let user = user
+                .as_deref()
+                .map(quoted)
+                .unwrap_or_else(|| "<ssh-user>".to_owned());
+            let at = format!("{user}@{address}");
+            (
+                if *port == 22 {
+                    at
+                } else {
+                    format!("-p {port} {at}")
+                },
+                surroundings.user.is_some(),
+            )
         }
-        _ => None,
+        (None, Some(user)) => (format!("{}@<ssh-host>", quoted(user)), false),
+        _ => (TEMPLATE.to_owned(), false),
     };
     Reach::Tunnel {
-        known: destination.is_some(),
-        command: format!(
-            "ssh -N -L {port}:{host}:{port} {}",
-            destination.as_deref().unwrap_or(TEMPLATE)
-        ),
+        known,
+        command: format!("ssh -N -L {port}:{host}:{port} {destination}"),
     }
 }
 
-pub(super) fn shown(url: &str, reach: &Reach, interactive: bool) {
+pub(crate) fn shown(url: &str, reach: &Reach, interactive: bool) {
     match reach {
         Reach::Here => {
             eprintln!("Open this URL to create and install the GitHub App:");
@@ -90,8 +92,7 @@ pub(super) fn shown(url: &str, reach: &Reach, interactive: bool) {
                 eprintln!("In a second terminal on your laptop, run:");
             } else {
                 eprintln!(
-                    "In a second terminal on your laptop, run this template with your own SSH \
-                     destination in place of {TEMPLATE}:"
+                    "In a second terminal on your laptop, replace the <ssh-...> placeholders in this template:"
                 );
             }
             eprintln!("  {command}");
@@ -102,7 +103,7 @@ pub(super) fn shown(url: &str, reach: &Reach, interactive: bool) {
 }
 
 /// Best effort: the URL is already printed, so a missing opener changes nothing.
-fn opened(url: &str) {
+pub(crate) fn opened(url: &str) {
     let opener = std::env::var("BROWSER")
         .ok()
         .filter(|browser| !browser.is_empty())
@@ -120,4 +121,24 @@ fn opened(url: &str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+}
+
+pub(crate) fn access(reach: Reach, operator: &Url) {
+    if let Reach::Tunnel { mut command, known } = reach {
+        if let (Some(host), Some(port)) = (operator.host_str(), operator.port_or_known_default()) {
+            let forward = format!("-L {port}:{host}:{port}");
+            if !command.contains(&format!("-L {port}:")) {
+                command = command.replacen("ssh -N", &format!("ssh -N {forward}"), 1);
+            }
+        }
+        if known {
+            eprintln!("From your laptop, forward the Client and operator ports:");
+        } else {
+            eprintln!(
+                "For remote access, replace the <ssh-...> placeholders in this SSH template:"
+            );
+        }
+        eprintln!("  {command}");
+        eprintln!("Then open the printed URL in your browser.");
+    }
 }

@@ -230,7 +230,7 @@ async fn an_empty_name_is_refused_rather_than_falling_through_to_another_scope()
 }
 
 #[tokio::test]
-async fn status_prints_every_resolved_value_its_source_what_exists_and_what_to_run_next() {
+async fn status_prints_every_resolved_value_its_source_and_what_exists() {
     let kestrel = Kestrel::boot().await;
     Fixture::acme().declare(&kestrel).await;
 
@@ -254,10 +254,7 @@ async fn status_prints_every_resolved_value_its_source_what_exists_and_what_to_r
     assert_eq!(reported[0]["integrations"], 0);
     assert_eq!(reported[0]["credentials"], 0);
     assert_eq!(reported[0]["profiles"], 0);
-    assert_eq!(
-        reported[0]["next"],
-        "kestrel workspace open --project kestrel --agent builder"
-    );
+    assert_eq!(reported[0]["readiness"]["outcome"], "blocked");
     kestrel.teardown().await;
 }
 
@@ -296,21 +293,12 @@ async fn status_names_the_environment_and_the_binding_when_each_is_the_source() 
 }
 
 #[tokio::test]
-async fn status_explains_an_unresolved_scope_instead_of_failing() {
+async fn status_requires_a_scope_when_several_organizations_exist() {
     let kestrel = two_organizations().await;
-
-    let reported = ran_by(&kestrel, &["status", "--json"], Invocation::default())
-        .await
-        .records();
-
-    assert_eq!(reported[0]["control_plane"], kestrel.operator());
-    assert_eq!(reported[0]["organization"], Value::Null);
-    assert_eq!(reported[0]["organization_source"], Value::Null);
-    assert_eq!(
-        reported[0]["organizations"],
-        serde_json::json!(["acme", "globex"])
-    );
-    assert_eq!(reported[0]["next"], "kestrel status --organization <name>");
+    let reported = ran_by(&kestrel, &["status"], Invocation::default()).await;
+    assert_eq!(reported.status.code(), Some(3));
+    assert!(reported.out.is_empty());
+    assert!(reported.err.contains("--organization"), "{}", reported.err);
     kestrel.teardown().await;
 }
 

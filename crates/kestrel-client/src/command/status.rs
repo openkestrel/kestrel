@@ -1,11 +1,14 @@
 use anyhow::Result;
 use kestrel_operator_types as wire;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
-use crate::BINARY;
+use crate::diagnostic::{self, Invocation};
+use crate::readiness;
+use crate::scope::Scoping;
+
 use crate::api::ControlPlane;
 use crate::output::Presentation;
-use crate::scope::Derived;
 use crate::{typed, view};
 
 #[derive(Serialize)]
@@ -18,8 +21,13 @@ pub(crate) struct StatusLocation {
 pub(crate) struct Status {
     #[serde(flatten)]
     pub(crate) location: StatusLocation,
-    pub(crate) organization: String,
-    pub(crate) organization_source: String,
+    pub(crate) client_url: String,
+    pub(crate) readiness: wire::Readiness,
+    pub(crate) organization: Option<String>,
+    pub(crate) organization_source: Option<String>,
+    pub(crate) workspace_counts: BTreeMap<String, usize>,
+    pub(crate) session_counts: BTreeMap<String, usize>,
+    pub(crate) sessions: Vec<wire::Session>,
     pub(crate) projects: usize,
     pub(crate) agents: usize,
     pub(crate) triggers: usize,
@@ -27,49 +35,38 @@ pub(crate) struct Status {
     pub(crate) integrations: usize,
     pub(crate) credentials: usize,
     pub(crate) profiles: usize,
-    pub(crate) next: String,
-}
-
-#[derive(Serialize)]
-pub(crate) struct UnresolvedStatus {
-    #[serde(flatten)]
-    pub(crate) location: StatusLocation,
-    pub(crate) organization: Option<String>,
-    pub(crate) organization_source: Option<String>,
-    pub(crate) organizations: Vec<String>,
-    pub(crate) next: String,
 }
 
 pub(crate) async fn show(
     api: &ControlPlane,
     presentation: &Presentation,
     location: StatusLocation,
-    derived: Derived,
+    scoping: Scoping<'_>,
+    invocation: &Invocation,
 ) -> Result<()> {
-    let scope = match derived {
-        Derived::Scope(scope) => scope,
-        Derived::Unnamed { existing } => {
-            let next = if existing.is_empty() {
-                format!("{BINARY} organization declare <name>")
-            } else {
-                format!("{BINARY} status --organization <name>")
-            };
-            typed::show(
-                presentation,
-                &view::UNRESOLVED,
-                &UnresolvedStatus {
-                    location,
-                    organization: None,
-                    organization_source: None,
-                    organizations: existing,
-                    next,
-                },
-            )?;
-            return Ok(());
-        }
+    let (read, source) = readiness::read(api, scoping).await?;
+    let organization = read.organization.as_deref();
+    let Some(organization) = organization else {
+        let status = Status {
+            location,
+            client_url: read.client_url.clone(),
+            organization: None,
+            organization_source: source,
+            readiness: read,
+            projects: 0,
+            agents: 0,
+            triggers: 0,
+            workspaces: 0,
+            integrations: 0,
+            credentials: 0,
+            profiles: 0,
+            workspace_counts: workspace_counts(),
+            session_counts: session_counts(),
+            sessions: Vec::new(),
+        };
+        return shown(presentation, &status, invocation);
     };
 
-    let organization = scope.organization.as_str();
     let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
         async {
             api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
@@ -116,13 +113,38 @@ pub(crate) async fn show(
             .await
         },
     )?;
-    typed::show(
+    let mut workspace_counts = workspace_counts();
+    let mut session_counts = session_counts();
+    let mut sessions = Vec::new();
+    for workspace in &workspaces {
+        *workspace_counts
+            .entry(workspace.state.to_string())
+            .or_default() += 1;
+        let listed: wire::ListSessionsResponse = api
+            .get_as(&[
+                "organizations",
+                organization,
+                "workspaces",
+                &workspace.id.to_string(),
+                "sessions",
+            ])
+            .await?;
+        for session in listed {
+            *session_counts.entry(session.state.to_string()).or_default() += 1;
+            sessions.push(session);
+        }
+    }
+    shown(
         presentation,
-        &view::STATUS,
         &Status {
             location,
-            organization: organization.to_owned(),
-            organization_source: scope.source.to_string(),
+            client_url: read.client_url.clone(),
+            organization: Some(organization.to_owned()),
+            organization_source: source,
+            readiness: read,
+            workspace_counts,
+            session_counts,
+            sessions,
             projects: projects.len(),
             agents: agents.len(),
             triggers: triggers.len(),
@@ -130,24 +152,46 @@ pub(crate) async fn show(
             integrations: integrations.len(),
             credentials: credentials.len(),
             profiles: profiles.len(),
-            next: next_command(projects.first(), agents.first()),
         },
-    )?;
-
-    Ok(())
+        invocation,
+    )
 }
 
-fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
-    match (project, agent) {
-        (Some(project), Some(agent)) => {
-            format!(
-                "{BINARY} workspace open --project {} --agent {}",
-                project.name, agent.name
-            )
-        }
-        (Some(_), None) => format!("{BINARY} agent declare <name>"),
-        (None, _) => {
-            format!("{BINARY} project declare <name> --repository <url> --branch <branch>")
+fn workspace_counts() -> BTreeMap<String, usize> {
+    [wire::WorkspaceState::Open, wire::WorkspaceState::Sealed]
+        .into_iter()
+        .map(|state| (state.to_string(), 0))
+        .collect()
+}
+
+fn session_counts() -> BTreeMap<String, usize> {
+    use wire::SessionState::*;
+    [
+        Queued,
+        Working,
+        Trailing,
+        Waiting,
+        Unbriefed,
+        Ended,
+        Unreachable,
+    ]
+    .into_iter()
+    .map(|state| (state.to_string(), 0))
+    .collect()
+}
+
+fn shown(presentation: &Presentation, status: &Status, invocation: &Invocation) -> Result<()> {
+    typed::show(presentation, &view::STATUS, status)?;
+    if !presentation.json() {
+        for session in &status.sessions {
+            if let Some(diagnosis) = &session.diagnostic {
+                eprintln!(
+                    "Session {}: {}",
+                    session.name,
+                    diagnostic::inline(diagnosis, invocation)
+                );
+            }
         }
     }
+    readiness::finish(&status.readiness, invocation)
 }

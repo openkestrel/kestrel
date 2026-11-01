@@ -197,7 +197,7 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   or repository screen to bind those steps to; Integration and GitHub App refusals still answer a plain
   `Refusal`. Readiness carries the shared contract, but its `sign_in` and `connect_github`
   steps render as sentences until `kestrel login` and `kestrel integration github connect`
-  exist, and only bare `kestrel` reads it: `kestrel status` and `kestrel start` do not yet. A
+  exist, bare `kestrel` and `kestrel status` read it, while `kestrel start` does not yet. A
   Session's failure diagnostic attributes no sign-in.
 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): the

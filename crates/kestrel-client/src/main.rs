@@ -1,4 +1,5 @@
 mod api;
+mod browser;
 mod changes;
 mod command;
 mod completion;
@@ -37,7 +38,7 @@ use crate::output::Presentation;
 use crate::scope::{Scope, Scoping, Source};
 use crate::usage::{exit_after, json_value};
 
-pub(crate) use crate::command::status::{Status, UnresolvedStatus};
+pub(crate) use crate::command::status::Status;
 
 const BINARY: &str = "kestrel";
 const CONTROL_PLANE_VARIABLE: &str = "KESTREL_CONTROL_PLANE";
@@ -235,18 +236,13 @@ async fn run(
         Command::Workspace(command) => command::workspace::run(running, command).await,
         Command::Session(command) => command::session::run(running, command).await,
         Command::Instance(command) => command::instance::run(running, command).await,
+        Command::Open { workspace } => command::open::run(running, workspace).await,
         Command::Status => {
             let location = command::status::StatusLocation {
                 control_plane: client.control_plane.clone(),
                 control_plane_source: control_plane_source.to_string(),
             };
-            command::status::show(
-                &api,
-                &presentation,
-                location,
-                running.scoping.derive().await?,
-            )
-            .await
+            command::status::show(&api, &presentation, location, running.scoping, invocation).await
         }
         Command::Queue => {
             let organization = running.scoping.resolve().await?.organization;

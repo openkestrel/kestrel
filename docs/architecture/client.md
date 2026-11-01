@@ -18,6 +18,14 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   stderr as any Diagnostic does, with its steps, and each warning follows `warning:`. `--json`
   writes the whole read to stdout. Only the heading is coloured, on a terminal with `NO_COLOR`
   unset. Several Organizations and none in scope is exit 3 before anything is read.
+- **Status and browser navigation**: `kestrel status` leads with the configured Client URL,
+  contextual readiness and zero-inclusive Workspace/Session counts by state. It keeps the derived
+  Organization and its source, reads every Session in that scope, and uses the same readiness
+  diagnostics and 0/78/5 exits as bare `kestrel`. Failed Sessions carry their durable diagnostics
+  without failing the read. `kestrel open [workspace]` resolves a scoped reference, defaults to
+  `latest` when a Workspace exists, and otherwise prints the Client root. The URL goes to stdout
+  before a best-effort browser launch at a terminal. SSH/no-display access instructions go to
+  stderr, sharing GitHub's browser access helper and preserving known SSH and service ports.
 - **The Operator**: `kestrel operator name NAME` names or renames them and `operator show` reads
   them. Every `--as-participant` is optional and sent only when given; the Client supplies no
   name of its own.
@@ -76,12 +84,12 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   `test_providers` locally, says it spends model usage, posts once and reads the known test until
   it ends; only `worked` reaches stdout, and any other end is a typed Diagnostic (exit 4, or 5 for
   `unavailable`, `harness_failed` and an interrupted test).
-- **GitHub connection** (`command/integration/github/connect.rs`, `reach.rs`): `kestrel
+- **GitHub connection** (`command/integration/github/connect.rs`, `browser.rs`): `kestrel
   integration github connect` starts the manifest flow with the readiness read's `client_url` as
   its callback base, prints the setup URL on its own stderr line and opens it only when stderr is
   a terminal with a display. Over SSH, or with no display, it prints an `ssh -N -L` tunnel to the
   Client port, naming `$USER@` and `SSH_CONNECTION`'s server address and non-22 port when known
-  and an explicit `<ssh-destination>` template otherwise; it never guesses an alias. It then polls
+  and explicit `<ssh-...>` placeholders for unknown destination details; it never guesses an alias. It then polls
   `GET …/github-app/flows/{flow}`, never the Integration list, finishing with `--repository` once
   the App is installed or leaving the choice to the browser. Cancellation, expiry and failed
   conversion end in a typed Diagnostic built from the flow (exit 4); Ctrl-C only stops waiting, and
