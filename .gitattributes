@@ -49,8 +49,6 @@ docs/measurements/** linguist-generated=true
 
 /crates/kestrel/src/role/work.rs token-budget-exempt=841
 
-/crates/kestrel/src/sign_in.rs token-budget-exempt=851
-
 /crates/kestrel/src/sign_in/model_test.rs token-budget-exempt=823
 
 /crates/kestrel/src/sign_in/relay.rs token-budget-exempt=829
