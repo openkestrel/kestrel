@@ -24,9 +24,10 @@ fn connecting(kestrel: &Kestrel, args: &[&str], invocation: Invocation) -> Clien
 }
 
 /// Off the runtime, which serves the control plane the Client is talking to.
-async fn heard(client: Client, text: &'static str) -> Client {
+async fn heard(client: Client, text: &str) -> Client {
+    let text = text.to_owned();
     tokio::task::spawn_blocking(move || {
-        client.until_err_says(text);
+        client.until_err_says(&text);
         client
     })
     .await
@@ -207,14 +208,9 @@ async fn interrupted_waiting_keeps_the_setup_and_resuming_finishes_it() {
     let stub = GithubStub::start();
     let kestrel = booted(&stub).await;
 
-    let (mut client, flow) = flow_from(connecting(&kestrel, &[], Invocation::default())).await;
-    let said = client.err_so_far();
-    assert!(
-        said.contains(&format!(
-            "kestrel integration github connect --resume {flow}"
-        )),
-        "{said}"
-    );
+    let (client, flow) = flow_from(connecting(&kestrel, &[], Invocation::default())).await;
+    let resume = format!("kestrel integration github connect --resume {flow}");
+    let mut client = heard(client, &resume).await;
     client.interrupt();
     let interrupted = tokio::task::spawn_blocking(move || client.finish())
         .await
