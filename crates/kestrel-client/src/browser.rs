@@ -53,14 +53,12 @@ pub(crate) fn reach(surroundings: &Surroundings, client: &Url, operator: Option<
     let port = client.port_or_known_default().unwrap_or(80);
     let host = client.host_str().unwrap_or("localhost");
     let mut forwards = format!("-L {port}:{host}:{port}");
-    if let Some(operator) = operator {
-        if let (Some(host), Some(operator_port)) =
+    if let Some(operator) = operator
+        && let (Some(host), Some(operator_port)) =
             (operator.host_str(), operator.port_or_known_default())
-        {
-            if operator_port != port {
-                forwards.push_str(&format!(" -L {operator_port}:{host}:{operator_port}"));
-            }
-        }
+        && operator_port != port
+    {
+        forwards.push_str(&format!(" -L {operator_port}:{host}:{operator_port}"));
     }
     let (destination, known) = match (&surroundings.server, &surroundings.user) {
         (Some((address, port)), user) if surroundings.ssh => {
