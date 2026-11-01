@@ -16,7 +16,7 @@ enum Named {
 impl Identity {
     /// None for anything a declaration would refuse.
     pub fn of(given: &str) -> Option<Self> {
-        let address = super::address(given).ok()?;
+        let address = super::address::address(given).ok()?;
         if let Some(named) = github::named_repository(&address) {
             return Some(Self(Named::Github(named.to_ascii_lowercase())));
         }
