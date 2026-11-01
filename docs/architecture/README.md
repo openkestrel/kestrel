@@ -180,7 +180,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   name, directions and interval change, disable/enable pause and resume use, a validated App
   private key replaces the last, a webhook-secret rotation survives failure and restart until
   GitHub acknowledges it, and retirement ends it for good, all under revision fences. Repositories
-  settings in the browser takes each of these steps; renaming and directions are CLI-only. A Project selects an
+  settings in the browser pauses, resumes, replaces a key, rotates and retires; a name,
+  directions or interval change is CLI-only. A Project selects an
   Integration per repository, a Workspace fixes that selection at open, and a running Session's
   `gh` and `git` are lent tokens from it at each use ([Link](link.md#github-at-each-use)); no
   queued Session waits on an Integration yet, so nothing is held paused by a disabled one.

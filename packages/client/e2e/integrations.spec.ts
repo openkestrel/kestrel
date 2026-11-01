@@ -67,6 +67,37 @@ function unacknowledged(operation: string) {
 	};
 }
 
+function conflict(operation: string, message: string, steps: unknown[]) {
+	return {
+		kind: "state_conflict",
+		message,
+		field: null,
+		context: {
+			operation,
+			resource: "integration",
+			reference: "github",
+			organization: ORGANIZATION,
+			state: "disabled",
+			holding_session: null,
+		},
+		next_steps: [
+			{
+				action: "inspect_resource",
+				resource: "integration",
+				reference: "github",
+				organization: ORGANIZATION,
+			},
+			...steps,
+		],
+	};
+}
+
+const DISABLED = conflict(
+	"show_integration",
+	"the integration github is disabled; enable it to resume what waits on it",
+	[{ action: "enable_integration", organization: ORGANIZATION, integration: "github" }],
+);
+
 test.beforeAll(async ({ request }) => {
 	await request.post("/operator/organizations", { data: { name: ORGANIZATION } });
 });
@@ -115,12 +146,14 @@ test("pausing shows what waits before it is confirmed, and resuming carries on",
 	const held: Held = { integration: github(), writes: [] };
 	await stub(page, held, {
 		"/github/disable": (route, h) =>
-			settle(h, { state: "disabled", disabled_at: new Date().toISOString(), revision: 4 })(
-				route,
-				h,
-			),
+			settle(h, {
+				state: "disabled",
+				disabled_at: new Date().toISOString(),
+				revision: 4,
+				diagnostic: DISABLED,
+			})(route, h),
 		"/github/enable": (route, h) =>
-			settle(h, { state: "enabled", disabled_at: null, revision: 5 })(route, h),
+			settle(h, { state: "enabled", disabled_at: null, revision: 5, diagnostic: null })(route, h),
 	});
 	await page.goto(SETTINGS);
 	await expect(card(page).locator("[data-lifecycle-state]")).toHaveText("In use");
@@ -141,9 +174,9 @@ test("pausing shows what waits before it is confirmed, and resuming carries on",
 		"reaches GitHub as github, which is paused",
 	);
 
-	await card(page).getByRole("button", { name: "Resume github" }).click();
+	await expect(card(page).getByRole("button", { name: "Pause…" })).toHaveCount(0);
+	await card(page).getByRole("button", { name: "Enable the Integration github" }).click();
 	await expect(card(page).locator("[data-lifecycle-state]")).toHaveText("In use");
-	await expect(card(page).locator("[data-maintained]")).toContainText("Resumed");
 	expect(held.writes.map(({ path }) => path)).toEqual(["/github/disable", "/github/enable"]);
 });
 
@@ -245,6 +278,15 @@ test("an interrupted rotation is resumed from the producer's own step, never res
 	const held: Held = { integration: github(), writes: [] };
 	await stub(page, held, {
 		"/github/webhook-secret-rotation": (route, h) => {
+			if (h.integration.webhook_secret_rotation)
+				return route.fulfill({
+					status: 409,
+					json: conflict(
+						"rotate_integration_webhook_secret",
+						"the integration github is already rotating its webhook secret",
+						[RESUME],
+					),
+				});
 			h.integration = {
 				...h.integration,
 				webhook_secret_rotation: {
@@ -274,16 +316,20 @@ test("an interrupted rotation is resumed from the producer's own step, never res
 	await page.reload();
 	const rotation = card(page).locator("[data-rotation]");
 	await expect(rotation).toContainText("is unfinished");
-	await expect(card(page).getByRole("button", { name: "Rotate the webhook secret…" })).toHaveCount(
-		0,
-	);
 	expect(held.writes.map(({ path }) => path)).toEqual(["/github/webhook-secret-rotation"]);
+
+	await card(page).getByRole("button", { name: "Rotate the webhook secret…" }).click();
+	await card(page).getByRole("button", { name: "Rotate the webhook secret github" }).click();
+	await expect(
+		card(page).locator("[data-maintenance] [data-diagnostic=state_conflict]"),
+	).toContainText("already rotating");
 
 	await rotation
 		.getByRole("button", { name: "Resume the Integration github's webhook-secret rotation" })
 		.click();
 	await expect(card(page).locator("[data-rotation]")).toHaveCount(0);
 	expect(held.writes.map(({ path }) => path)).toEqual([
+		"/github/webhook-secret-rotation",
 		"/github/webhook-secret-rotation",
 		"/github/webhook-secret-rotation/resume",
 	]);

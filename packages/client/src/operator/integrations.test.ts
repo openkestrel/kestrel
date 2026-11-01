@@ -58,6 +58,7 @@ describe("lifecycleOf", () => {
 		);
 		expect(paused.label).toBe("Paused");
 		expect(paused.since).toBe("2026-11-01T09:00:00Z");
+		expect(paused.detail).toContain("Paused for acme/repo in acme");
 		expect(paused.detail).toContain("kept for when it resumes");
 	});
 
@@ -68,6 +69,7 @@ describe("lifecycleOf", () => {
 		);
 		expect(retired.label).toBe("Retired");
 		expect(retired.since).toBe("2026-11-01T11:00:00Z");
+		expect(retired.detail).toContain("Retired for acme/repo in acme");
 		expect(retired.detail).toContain("untouched on GitHub");
 		expect(retired.detail).not.toMatch(/deleted|uninstalled/);
 	});
@@ -78,19 +80,15 @@ describe("offered", () => {
 		expect(offered(integration())).toEqual(["pause", "key", "rotate", "retire"]);
 	});
 
-	it("offers resuming in place of pausing, and keeps the key and retirement", () => {
-		expect(offered(integration({ state: "disabled" }))).toEqual([
-			"resume",
-			"key",
-			"rotate",
-			"retire",
-		]);
+	it("leaves resuming a paused Integration to its diagnostic's step", () => {
+		expect(offered(integration({ state: "disabled" }))).toEqual(["key", "rotate", "retire"]);
 	});
 
-	it("leaves an unfinished rotation to its own diagnostic rather than starting another", () => {
+	it("still offers a rotation while one is unfinished, for the producer to refuse", () => {
 		expect(offered(integration({ webhook_secret_rotation: rotation }))).toEqual([
 			"pause",
 			"key",
+			"rotate",
 			"retire",
 		]);
 	});

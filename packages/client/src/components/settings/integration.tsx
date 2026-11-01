@@ -1,6 +1,6 @@
 import { Diagnosis } from "#/components/refusal";
 import { Webhook } from "#/components/settings/github";
-import { Maintenance } from "#/components/settings/integration-maintenance";
+import { IntegrationMaintenance } from "#/components/settings/integration-maintenance";
 import { Badge } from "#/components/ui/badge";
 import type { Integration, WebhookSecretRotation } from "#/operator/generated";
 import { lifecycleOf } from "#/operator/integrations";
@@ -58,12 +58,11 @@ export function IntegrationCard({
 			) : (
 				<Webhook organization={organization} integration={integration} />
 			)}
-			<Maintenance organization={organization} integration={integration} retry={retry} />
+			<IntegrationMaintenance organization={organization} integration={integration} retry={retry} />
 		</li>
 	);
 }
 
-// Its resume step is the producer's, from the rotation's own diagnostic.
 function Rotation({ rotation, retry }: { rotation: WebhookSecretRotation; retry: () => void }) {
 	return (
 		<section

@@ -8,32 +8,28 @@ import type { Integration } from "#/operator/generated";
 import {
 	consequenceOf,
 	maintain,
-	type Maintenance as Kind,
+	type Maintenance,
 	offered,
 	replacePrivateKey,
 	replaced,
 } from "#/operator/integrations";
 import { integrationsQuery } from "#/operator/repositories";
 
-type Chosen = Exclude<Kind, "resume">;
-
-const OFFER: Record<Kind, string> = {
+const OFFER: Record<Maintenance, string> = {
 	pause: "Pause",
-	resume: "Resume",
 	key: "Replace the App private key",
 	rotate: "Rotate the webhook secret",
 	retire: "Retire",
 };
 
-const DONE: Record<Kind, string> = {
+const DONE: Record<Maintenance, string> = {
 	pause: "Paused. Resume it whenever you like; nothing it resumes with was erased.",
-	resume: "Resumed. Its poll reads on from where it stopped.",
 	key: "Replaced the App private key. It still signs as the same App, for the same installation and repository.",
 	rotate: "GitHub acknowledged the new webhook secret, which is now the only one that verifies.",
 	retire: "Retired for good in kestrel. The GitHub App and its installation are untouched.",
 };
 
-export function Maintenance({
+export function IntegrationMaintenance({
 	organization,
 	integration,
 	retry,
@@ -43,11 +39,11 @@ export function Maintenance({
 	retry: () => void;
 }) {
 	const queryClient = useQueryClient();
-	const [chosen, setChosen] = useState<Chosen | null>(null);
-	const [done, setDone] = useState<Kind>();
+	const [chosen, setChosen] = useState<Maintenance | null>(null);
+	const [done, setDone] = useState<Maintenance>();
 	const offers = offered(integration);
 
-	async function settle(changed: Integration, kind: Kind) {
+	async function settle(changed: Integration, kind: Maintenance) {
 		queryClient.setQueryData(integrationsQuery(organization).queryKey, (listed) =>
 			replaced(listed, changed),
 		);
@@ -58,13 +54,13 @@ export function Maintenance({
 	}
 
 	const writing = useMutation({
-		mutationFn: (kind: Exclude<Kind, "key">) => maintain(organization, integration, kind),
+		mutationFn: (kind: Exclude<Maintenance, "key">) => maintain(organization, integration, kind),
 		onSuccess: (changed, kind) => settle(changed, kind),
 		// A refused write may still have moved the record, as an unacknowledged rotation does.
 		onError: () => queryClient.invalidateQueries({ queryKey: ["organizations", organization] }),
 	});
 
-	function choose(kind: Chosen | null) {
+	function choose(kind: Maintenance | null) {
 		writing.reset();
 		setDone(undefined);
 		setChosen(kind);
@@ -75,34 +71,19 @@ export function Maintenance({
 		<section aria-label={`Maintain ${integration.name}`} className="grid gap-2" data-maintenance>
 			{offers.length > 0 && (
 				<div className="flex flex-wrap gap-2">
-					{offers.map((kind) =>
-						kind === "resume" ? (
-							<Button
-								key={kind}
-								size="xs"
-								type="button"
-								disabled={writing.isPending}
-								onClick={() => {
-									choose(null);
-									writing.mutate("resume");
-								}}
-							>
-								{writing.isPending ? "Resuming…" : `Resume ${integration.name}`}
-							</Button>
-						) : (
-							<Button
-								key={kind}
-								size="xs"
-								type="button"
-								variant={kind === "retire" ? "destructive" : "outline"}
-								aria-expanded={chosen === kind}
-								disabled={writing.isPending}
-								onClick={() => choose(chosen === kind ? null : kind)}
-							>
-								{OFFER[kind]}…
-							</Button>
-						),
-					)}
+					{offers.map((kind) => (
+						<Button
+							key={kind}
+							size="xs"
+							type="button"
+							variant={kind === "retire" ? "destructive" : "outline"}
+							aria-expanded={chosen === kind}
+							disabled={writing.isPending}
+							onClick={() => choose(chosen === kind ? null : kind)}
+						>
+							{OFFER[kind]}…
+						</Button>
+					))}
 				</div>
 			)}
 			{chosen === "key" && (
@@ -139,7 +120,7 @@ function Confirmation({
 	onConfirm,
 	onCancel,
 }: {
-	kind: Exclude<Chosen, "key">;
+	kind: Exclude<Maintenance, "key">;
 	integration: Integration;
 	pending: boolean;
 	onConfirm: () => void;
