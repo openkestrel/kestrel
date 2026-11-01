@@ -7,153 +7,130 @@ use kestrel_operator_types as wire;
 use super::Running;
 use super::input::given;
 use crate::api::ControlPlane;
+use crate::diagnostic::{self, Invocation};
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
-use crate::scope::{self, Derived, Scoping};
+use crate::scope::{Derived, Scoping, Source};
 use crate::{start, typed, view};
 
 #[derive(Debug, Args)]
 pub(crate) struct Start {
-    /// The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from standard
-    /// input
+    /// The Brief: the initial prompt that tells the Session what to do. `@FILE` reads it from a
+    /// file and `-` from standard input
     #[arg(long)]
-    brief: String,
-    /// A repository the work happens against; repeat for many. Without it, the clone's origin
+    brief: Option<String>,
+    /// A repository the work happens against; repeat for many. Without it, the Project's, then
+    /// the clone's origin
     #[arg(long = "repository", value_name = "URL")]
     repositories: Vec<String>,
-    /// The branch the work happens on. Without it, a Project's own, then origin's default,
-    /// then the branch checked out
+    /// The base branch each Workspace's own branch starts from. Without it, the Project's,
+    /// then origin's default, then the branch checked out
     #[arg(long)]
     branch: Option<String>,
     /// The Project, declared if missing. Without it, the one declaring the repositories, then
-    /// the repository's name
+    /// one named for the repository
     #[arg(long)]
     project: Option<String>,
-    /// The Agent, declared if missing. Without it, the only one, then its harness's name
+    /// The Agent, declared if missing. Without it, the only one, then one named for its harness
     #[arg(long)]
     agent: Option<String>,
-    /// The Harness a declared Agent is driven by. Without it, the declared Agent's, then
-    /// kestrel's default
+    /// The Harness a declared Agent is driven by. Without it, the Agent's, then the one a saved
+    /// sign-in serves, then kestrel's default
     #[arg(long)]
     harness: Option<String>,
     /// The model a declared Agent works with. Without it, its Harness's default
     #[arg(long)]
     model: Option<String>,
+    /// The Subscription Profile the Session uses. Without it, the Operator's own
+    #[arg(long)]
+    profile: Option<String>,
+    /// The saved Sign-in Method the Session is handed, withholding the harness's others
+    #[arg(long = "sign-in", value_name = "METHOD")]
+    sign_in: Option<String>,
     /// A Provider Credential for the Organization to hold, read from the environment variable
     /// of this name; repeat for many
     #[arg(long = "credential", value_name = "VARIABLE")]
     credentials: Vec<String>,
-    /// Apply the plan without asking. A start asks only when standard input and standard error
-    /// are both a terminal
+    /// Apply the reviewed plan. Without a terminal nothing is applied without it; it never
+    /// supplies a missing value
     #[arg(long, short)]
     yes: bool,
 }
 
 pub(crate) async fn run(running: Running<'_>, start: Start) -> Result<()> {
-    started(running.api, running.presentation, running.scoping, start).await
+    started(
+        running.api,
+        running.presentation,
+        running.scoping,
+        running.invocation,
+        start,
+    )
+    .await
 }
 
-/// Every value is explained on stderr before anything changes, so what stdout carries is what
-/// the start reached and nothing else.
+/// The plan is reviewed on stderr before anything changes, so stdout carries only what the
+/// start reached.
 async fn started(
     api: &ControlPlane,
     presentation: &Presentation,
     scoping: Scoping<'_>,
-    mut start: Start,
+    invocation: &Invocation,
+    start: Start,
 ) -> Result<()> {
-    let brief = given(&start.brief)?;
-    let mut clone =
+    let brief = start.brief.as_deref().map(given).transpose()?;
+    let clone =
         start::LocalClone::of(&std::env::current_dir().context("reading the working directory")?);
-    let (named, existing) = match scoping.derive().await? {
-        Derived::Scope(scope) => (Some(scope), Vec::new()),
-        Derived::Unnamed { existing } if existing.is_empty() => {
-            return Err(scope::nothing_to_scope(api).await);
+    // The only Organization is the control plane's to find, so only a named one is sent.
+    let organization = match scoping.derive().await? {
+        Derived::Scope(scope) if !matches!(scope.source, Source::OnlyOrganization) => {
+            Some(scope.organization)
         }
-        Derived::Unnamed { existing } => (None, existing),
+        Derived::Scope(_) | Derived::Unnamed { .. } => None,
     };
-    let organization =
-        start::organization(named, &existing).map_err(|missing| incomplete(&[missing]))?;
-
-    let declared = scope::organizations(api)
-        .await?
-        .contains(&organization.value);
-    let (projects, agents, credentials) = if declared {
-        let within = |records| ["organizations", &organization.value, records];
-        tokio::try_join!(
-            async { api.get_as(&within("projects")).await },
-            async { api.get_as(&within("agents")).await },
-            async { api.get_as(&within("credentials")).await },
-        )?
-    } else {
-        (Vec::new(), Vec::new(), Vec::new())
-    };
-    let mut existing = start::Existing::read(declared, projects, agents, credentials);
-    let names_a_project = start.project.as_ref().is_some_and(|name| {
-        existing
-            .projects
-            .iter()
-            .any(|declared| &declared.name == name)
-    });
-    // Planning matches declared Projects by address, so it compares what a declaration would hold.
-    if !start.repositories.is_empty() {
-        start.repositories = resolved(api, start.repositories).await?;
-    } else if !names_a_project && let Some(origin) = clone.origin.take() {
-        if declared {
-            let declaring: wire::ListProjectsResponse = api
-                .get_where_as(
-                    &["organizations", &organization.value, "projects"],
-                    &[("repository", &origin)],
-                )
-                .await?;
-            existing.declaring = Some(declaring.into_iter().map(|record| record.name).collect());
-        }
-        clone.origin = resolved(api, vec![origin]).await?.pop();
-    }
-
     let secrets = start::secrets(&start.credentials, |variable| std::env::var(variable).ok());
-    let plan = start::plan(
+
+    let plan = wire::StartPlan {
         organization,
-        start::Given {
-            repositories: start.repositories,
-            branch: start.branch,
-            project: start.project,
-            agent: start.agent,
-            harness: start.harness,
-            model: start.model,
-            credentials: start.credentials,
-        },
-        &clone,
-        &existing,
-    );
-    let (plan, secrets) = match (plan, secrets) {
-        (Ok(plan), Ok(secrets)) => (plan, secrets),
-        (plan, secrets) => {
-            let mut missing = plan.err().unwrap_or_default();
-            missing.extend(secrets.err().unwrap_or_default());
-            return Err(incomplete(&missing));
-        }
+        project: start.project,
+        repositories: (!start.repositories.is_empty()).then_some(start.repositories),
+        integrations: None,
+        branch: start.branch,
+        agent: start.agent,
+        harness: start.harness,
+        model: start.model,
+        profile: start.profile,
+        sign_in_method: start.sign_in,
+        brief: brief.clone(),
+        credentials: (!start.credentials.is_empty()).then(|| {
+            start
+                .credentials
+                .iter()
+                .map(|variable| wire::StartCredential {
+                    variable: variable.clone(),
+                    secret: None,
+                })
+                .collect()
+        }),
+        clone: clone.sent(),
     };
+    let preview: wire::StartPreview = api.inspect_as(&["starts", "preview"], &plan).await?;
 
-    let explained = plan.explained();
-    let column = explained
-        .iter()
-        .map(|row| row.what.len())
-        .max()
-        .unwrap_or_default();
-    eprintln!("starting work with");
-    for row in &explained {
-        let (what, value, because, flag) = (row.what, &row.value, row.because, row.flag);
-        if row.given {
-            eprintln!("  {what:column$}  {value}  ({because})");
-        } else {
-            eprintln!("  {what:column$}  {value}  ({because}; {flag} overrides it)");
-        }
+    for line in start::review(&preview) {
+        eprintln!("{line}");
     }
+    for warning in &preview.warnings {
+        eprintln!("warning: {}", diagnostic::inline(warning, invocation));
+    }
+    let (brief, secrets) = ready(&preview, &clone, brief, secrets, invocation)?;
 
-    if !start.yes && std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
-        eprintln!("applying it will");
-        for step in plan.applying(&existing) {
-            eprintln!("  {step}");
+    if !start.yes {
+        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+            return Err(Failed::new(
+                Exit::Usage,
+                "nothing was applied: review the plan above and run the same command with --yes \
+                 to apply it",
+            )
+            .into());
         }
         if !confirmed()? {
             eprintln!("nothing was applied");
@@ -161,8 +138,12 @@ async fn started(
         }
     }
 
+    // A refused or lost start is reported, never sent again.
     let started: wire::Started = api
-        .post_as(&["starts"], &plan.body(&brief, &secrets))
+        .post_as(
+            &["starts"],
+            &start::applied(&preview, &plan, brief, secrets),
+        )
         .await?;
     for (kind, settled) in [
         ("organization", &started.organization),
@@ -173,22 +154,77 @@ async fn started(
             eprintln!("declared the {kind} {}", settled.name);
         }
     }
+    if started.completed_initial_setup {
+        eprintln!("initial setup is complete");
+    }
     typed::show(presentation, &view::STARTED, &started)
 }
 
-async fn resolved(api: &ControlPlane, repositories: Vec<String>) -> Result<Vec<String>> {
-    let resolution: wire::RepositoryResolution = api
-        .post_as(
-            &["repository-resolutions"],
-            &wire::RepositoryResolutionRequest::new(repositories),
-        )
-        .await?;
+/// A gap outranks a missing input, which outranks an inspection that failed; each names every
+/// other it found. A gap exits as its kind says: a setup prerequisite 78, a conflict 4.
+fn ready(
+    preview: &wire::StartPreview,
+    clone: &start::LocalClone,
+    brief: Option<String>,
+    secrets: Result<Vec<(String, String)>, Vec<String>>,
+    invocation: &Invocation,
+) -> Result<(String, Vec<(String, String)>)> {
+    if let Some((first, rest)) = preview.gaps.split_first() {
+        for gap in rest.iter().chain(&preview.missing) {
+            eprintln!("also: {}", diagnostic::inline(gap, invocation));
+        }
+        return Err(diagnostic::carried(first.clone()).into());
+    }
 
-    Ok(resolution
-        .repositories
-        .into_iter()
-        .map(|repository| repository.address)
-        .collect())
+    let mut missing: Vec<(String, String)> = preview
+        .missing
+        .iter()
+        .map(|missing| {
+            let field = diagnostic::field(missing).unwrap_or_default();
+            let mut because = diagnostic::message(missing).to_owned();
+            if field == "repositories"
+                && let Some(silent) = clone.silent()
+            {
+                because = format!("{because}: {silent}");
+            }
+            (start::flag(field), because)
+        })
+        .collect();
+    let secrets = secrets.unwrap_or_else(|unset| {
+        missing.extend(
+            unset
+                .into_iter()
+                .map(|because| ("--credential".to_owned(), because)),
+        );
+        Vec::new()
+    });
+    if !missing.is_empty() {
+        let mut flags: Vec<&str> = missing.iter().map(|(flag, _)| flag.as_str()).collect();
+        flags.dedup();
+        let reasons: Vec<String> = missing
+            .iter()
+            .map(|(flag, because)| format!("{flag}: {because}"))
+            .collect();
+        return Err(Failed::new(
+            Exit::Usage,
+            format!(
+                "the plan still needs {} ({})",
+                flags.join(" and "),
+                reasons.join("; ")
+            ),
+        )
+        .into());
+    }
+
+    if let Some(unavailable) = preview.unavailable.first()
+        && preview.outcome == wire::StartPreviewOutcome::Unavailable
+    {
+        return Err(Failed::diagnosed(Exit::Unavailable, unavailable.clone()).into());
+    }
+    match brief {
+        Some(brief) => Ok((brief, secrets)),
+        None => Err(Failed::new(Exit::Usage, "the plan still needs --brief").into()),
+    }
 }
 
 fn confirmed() -> Result<bool> {
@@ -209,22 +245,4 @@ fn confirmed() -> Result<bool> {
             _ => {}
         }
     }
-}
-
-fn incomplete(missing: &[start::Missing]) -> anyhow::Error {
-    let flags: Vec<&str> = missing.iter().map(|missing| missing.flag).collect();
-    let reasons: Vec<String> = missing
-        .iter()
-        .map(|missing| format!("{}: {}", missing.flag, missing.because))
-        .collect();
-
-    Failed::new(
-        Exit::Usage,
-        format!(
-            "nothing says what to start with; pass {} ({})",
-            flags.join(" and "),
-            reasons.join("; ")
-        ),
-    )
-    .into()
 }

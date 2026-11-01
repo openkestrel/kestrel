@@ -151,8 +151,9 @@ async fn a_declaration_document_whose_repositories_collide_after_resolution_save
 #[tokio::test]
 async fn a_start_declares_its_project_against_the_resolved_repositories() {
     let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
     let mut start = a_start("acme", "opencode", "Fix the flaky test");
-    start["project"]["repositories"] = json!(["jtmthf/kestrel"]);
+    start["repositories"] = json!(["jtmthf/kestrel"]);
 
     let (status, started) = declared(&kestrel, operator::STARTS, &start).await;
     assert_eq!(status, StatusCode::CREATED, "{started}");
@@ -161,7 +162,7 @@ async fn a_start_declares_its_project_against_the_resolved_repositories() {
         json!(["https://github.com/jtmthf/kestrel.git"])
     );
 
-    start["project"]["repositories"] = json!(["https://github.com/jtmthf/kestrel.git"]);
+    start["repositories"] = json!(["https://github.com/jtmthf/kestrel.git"]);
     let (status, again) = declared(&kestrel, operator::STARTS, &start).await;
     assert_eq!(status, StatusCode::CREATED, "{again}");
     assert_eq!(again["project"]["created"], false);
@@ -173,12 +174,12 @@ async fn a_start_declares_its_project_against_the_resolved_repositories() {
 async fn a_start_naming_an_unreadable_repository_leaves_nothing_behind() {
     let kestrel = Kestrel::boot().await;
     let mut start = a_start("acme", "opencode", "Fix the flaky test");
-    start["project"]["repositories"] = json!(["kestrel"]);
+    start["repositories"] = json!(["kestrel"]);
 
     let (status, refusal) = declared(&kestrel, operator::STARTS, &start).await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert_eq!(refusal["field"], "project.repositories");
+    assert_eq!(refusal["field"], "repositories");
     assert_eq!(refusal["context"]["constraint"], "git_repository");
     assert!(listed(&kestrel, operator::ORGANIZATIONS).await.is_empty());
 

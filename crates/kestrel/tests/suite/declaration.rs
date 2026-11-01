@@ -407,12 +407,11 @@ async fn a_start_refuses_its_declaration_change_on_the_first_differing_field() {
     Fixture::acme().declare(&kestrel).await;
     let start = json!({
         "organization": "acme",
-        "project": {
-            "name": "kestrel",
-            "repositories": ["https://github.com/jtmthf/kestrel"],
-            "branch": "next",
-        },
-        "agent": { "name": "builder", "harness": "opencode", "model": null },
+        "project": "kestrel",
+        "repositories": ["https://github.com/jtmthf/kestrel"],
+        "branch": "next",
+        "agent": "builder",
+        "harness": "opencode",
         "brief": "Fix the flaky test",
     });
 

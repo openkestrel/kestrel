@@ -519,11 +519,17 @@ async fn a_start_whose_selection_is_refused_writes_nothing_and_one_that_passes_f
     let stub = GithubStub::start();
     let kestrel = Kestrel::boot().await;
     connected(&kestrel, &stub).await;
+    kestrel.name_operator("ada").await;
     let plan = json!({
         "organization": "acme",
-        "project": selecting(SSH, "main", "github"),
-        "agent": { "name": "builder", "harness": "opencode" },
+        "project": "web",
+        "repositories": [SSH],
+        "integrations": [{ "repository": SSH, "integration": "github" }],
+        "branch": "main",
+        "agent": "builder",
+        "harness": "opencode",
         "brief": "Fix the flaky test",
+        "credentials": [{ "variable": "ANTHROPIC_API_KEY", "secret": "sk-ant-api03-key" }],
     });
     stub.script_answer("GET", NAMED, ScriptedResponse::answering(403));
 

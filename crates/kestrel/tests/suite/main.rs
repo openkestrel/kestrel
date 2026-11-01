@@ -94,6 +94,7 @@ mod sign_in_profiles;
 mod sign_in_revisions;
 mod sign_in_test_cli;
 mod start;
+mod start_preview;
 mod startup_store;
 mod stepped;
 mod stream;

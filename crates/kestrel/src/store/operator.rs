@@ -35,6 +35,18 @@ impl<'a> Operators<'a> {
             .is_some())
     }
 
+    /// Only the first call records anything; it answers whether this one did.
+    pub async fn complete_initial_setup(&mut self) -> Result<bool> {
+        let recorded = sqlx::query(
+            "INSERT INTO install (singleton, initial_setup_completed_at) VALUES (1, ?)
+                     ON CONFLICT (singleton) DO NOTHING",
+        )
+        .bind(self.clock.now().to_string())
+        .execute(&mut *self.connection)
+        .await?;
+        Ok(recorded.rows_affected() == 1)
+    }
+
     pub async fn name(&mut self, name: &str) -> Result<Declared<Operator>> {
         let existing = self.current().await?;
         let created = existing.is_none();

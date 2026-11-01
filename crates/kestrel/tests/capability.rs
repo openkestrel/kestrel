@@ -190,16 +190,17 @@ fn document(harness: &str) -> Value {
     })
 }
 
+/// Carries a key, so the only gap a start could meet past the Operator is the image's.
 fn plan(organization: &str, harness: &str) -> Value {
     json!({
         "organization": organization,
-        "project": {
-            "name": "site",
-            "repositories": ["https://github.com/acme/site"],
-            "branch": "main",
-        },
-        "agent": { "name": "coder", "harness": harness },
+        "project": "site",
+        "repositories": ["https://github.com/acme/site"],
+        "branch": "main",
+        "agent": "coder",
+        "harness": harness,
         "brief": "Fix it",
+        "credentials": [{ "variable": "OPENAI_API_KEY", "secret": "sk-key" }],
     })
 }
 
@@ -291,6 +292,7 @@ async fn a_refused_declaration_preview_apply_or_start_leaves_nothing_behind() {
         refused_as_not_carried(&refusal, &image.reference, "codex");
         assert_eq!(refusal["field"], "agent.harness");
     }
+    kestrel.name_operator("ada").await;
     let (status, refusal) = posted(&kestrel, "/operator/starts", plan("globex", "codex")).await;
     assert_eq!(status, StatusCode::CONFLICT);
     refused_as_not_carried(&refusal, &image.reference, "codex");
@@ -414,6 +416,7 @@ async fn an_image_gone_since_a_positive_read_is_unavailable_and_never_pulled() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     refused_as_unavailable(&refusal, &reference);
+    kestrel.name_operator("ada").await;
     let (status, refusal) = posted(&kestrel, "/operator/starts", plan("acme", "opencode")).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     refused_as_unavailable(&refusal, &reference);

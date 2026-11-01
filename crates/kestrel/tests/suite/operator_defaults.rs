@@ -612,9 +612,12 @@ async fn a_start_works_in_the_operators_organization_whoever_owns_the_repository
             "https://github.com/acme/widgets.git",
             "--branch",
             "main",
+            "--credential",
+            "ANTHROPIC_API_KEY",
+            "--yes",
             "--json",
         ],
-        Invocation::default(),
+        Invocation::default().env("ANTHROPIC_API_KEY", "sk-ant-api03-key"),
     )
     .await;
     succeeded(&started);

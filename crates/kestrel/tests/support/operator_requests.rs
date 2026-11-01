@@ -246,16 +246,17 @@ pub fn workspace_of(record: &Value) -> WorkspaceId {
         .expect("a workspace identifier")
 }
 
+/// Carries a key opencode signs in with, so the plan's path lacks no sign-in.
 pub fn a_start(organization: &str, harness: &str, brief: &str) -> Value {
     json!({
         "organization": organization,
-        "project": {
-            "name": "kestrel",
-            "repositories": ["https://github.com/jtmthf/kestrel"],
-            "branch": "main",
-        },
-        "agent": { "name": "builder", "harness": harness, "model": null },
+        "project": "kestrel",
+        "repositories": ["https://github.com/jtmthf/kestrel"],
+        "branch": "main",
+        "agent": "builder",
+        "harness": harness,
         "brief": brief,
+        "credentials": [{ "variable": "ANTHROPIC_API_KEY", "secret": "sk-ant-api03-key" }],
     })
 }
 

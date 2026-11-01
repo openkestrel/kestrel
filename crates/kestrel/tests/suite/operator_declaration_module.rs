@@ -233,21 +233,22 @@ async fn applied_triggers_reach_the_declaration_module(operation: &str, path: &s
 }
 
 #[tokio::test]
-async fn start_reaches_the_declaration_module() {
+async fn a_start_reports_an_empty_value_as_the_input_it_still_needs() {
     let kestrel = Kestrel::boot().await;
+    kestrel.name_operator("ada").await;
 
     let mut start = a_start("acme", "opencode", "Fix the flaky test");
-    start["project"]["branch"] = json!("");
+    start["branch"] = json!("");
     let refusal = refused_through_the_module(&kestrel, operator::STARTS, &start).await;
 
     says_the_field(
         &refusal,
-        "project.branch",
+        "branch",
         "non_empty",
-        "a project names the branch its work happens on",
+        "no branch is given, and no project or clone names one to start each workspace from",
         "start",
     );
-    assert!(listed(&kestrel, operator::ORGANIZATIONS).await.is_empty());
+    assert_eq!(listed(&kestrel, operator::ORGANIZATIONS).await.len(), 1);
 
     kestrel.teardown().await;
 }

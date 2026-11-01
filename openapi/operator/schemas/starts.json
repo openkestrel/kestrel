@@ -1,0 +1,170 @@
+{
+  "StartPlan": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "What a Client gives a start. Every field may be omitted from a preview; a start needs whatever the plan cannot resolve without it. A value given here always wins over one the control plane would infer.",
+    "properties": {
+      "organization": { "type": "string", "minLength": 1, "description": "Omitted, the only Organization." },
+      "project": { "type": "string", "minLength": 1, "description": "Omitted, the Project declaring the repositories, then one named for the first repository." },
+      "repositories": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Resolved as a Project declaration resolves them. Omitted, the named Project's, then the clone's."
+      },
+      "integrations": {
+        "type": "array",
+        "items": { "$ref": "organizations.json#/RepositoryIntegrationSelection" },
+        "description": "The Integration each repository of a Project the start declares selects. Omitted, a Project it reuses keeps its own, and one it declares selects none."
+      },
+      "branch": { "type": "string", "minLength": 1, "description": "The base branch each Workspace's own branch starts from. Omitted, the Project's, then the clone's." },
+      "agent": { "type": "string", "minLength": 1, "description": "Omitted, the only Agent when no harness or model is given, then one named for its harness." },
+      "harness": { "type": "string", "minLength": 1, "description": "Omitted, the Agent's, then the one harness a usable saved sign-in serves, then kestrel's default." },
+      "model": { "type": "string", "minLength": 1, "description": "Omitted, the Agent's, then its harness's default." },
+      "profile": { "type": "string", "minLength": 1, "description": "The Subscription Profile the Session uses. Omitted, the Operator's own Profile holding a subscription for the harness, then the Organization's Provider Credentials." },
+      "sign_in_method": { "type": "string", "minLength": 1, "description": "The catalogued Sign-in Method the Session is handed, withholding the harness's other catalogued sign-ins." },
+      "brief": { "type": "string", "minLength": 1, "description": "The Brief the Workspace starts with, handed to the agent exactly as given." },
+      "credentials": {
+        "type": "array",
+        "description": "Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable. A preview needs only the variable; a start needs each secret.",
+        "items": { "$ref": "#/StartCredential" }
+      },
+      "clone": { "$ref": "#/StartClone" }
+    }
+  },
+  "StartCredential": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "variable": { "type": "string", "minLength": 1 },
+      "secret": { "type": "string", "minLength": 1, "description": "Never returned, and never needed by a preview." }
+    },
+    "required": ["variable"]
+  },
+  "StartClone": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "What a Client found in the local clone it runs in, since the control plane runs no git. Each value is used only where nothing given or declared says otherwise.",
+    "properties": {
+      "repository": { "type": "string", "minLength": 1, "description": "The clone's origin, as git reports it." },
+      "default_branch": { "type": "string", "minLength": 1, "description": "The branch origin names as its default." },
+      "checked_out": { "type": "string", "minLength": 1, "description": "The branch checked out, used when origin names no default." }
+    },
+    "required": ["repository"]
+  },
+  "StartPreview": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "outcome": {
+        "type": "string",
+        "enum": ["ready", "incomplete", "blocked", "unavailable"],
+        "description": "`blocked` when `gaps` holds a setup prerequisite or a declaration the start would change. `incomplete` when none does but `missing` holds an input the plan needs. `unavailable` when neither holds anything but an inspection in `unavailable` failed. `ready` when a start of this plan would be attempted."
+      },
+      "organization": { "anyOf": [{ "$ref": "#/StartValue" }, { "type": "null" }] },
+      "project": { "anyOf": [{ "$ref": "#/StartValue" }, { "type": "null" }] },
+      "repositories": { "anyOf": [{ "$ref": "#/StartRepositories" }, { "type": "null" }] },
+      "branch": {
+        "description": "The base branch. Each Workspace works on a branch of its own, which it names when it opens, starting from this one.",
+        "anyOf": [{ "$ref": "#/StartValue" }, { "type": "null" }]
+      },
+      "agent": { "$ref": "#/StartValue" },
+      "harness": { "$ref": "#/StartValue" },
+      "model": { "$ref": "#/StartValue", "description": "Null when the harness chooses its default." },
+      "profile": { "$ref": "#/StartValue", "description": "Null when the Session uses the Organization's Provider Credentials." },
+      "sign_in_method": { "$ref": "#/StartValue", "description": "Null when none is selected, so everything the Organization and the Profile hold for the harness is handed over." },
+      "sign_in": {
+        "description": "The saved sign-in the Session would be handed, when exactly one is established. Never its material.",
+        "anyOf": [{ "$ref": "sign-ins.json#/SavedSignIn" }, { "type": "null" }]
+      },
+      "saved": { "$ref": "operator-setup.json#/ReadinessSaved" },
+      "declarations": {
+        "type": "array",
+        "description": "What a start of this plan would do, in order: the declarations it adds or reuses, the credentials it holds, and the Workspace it opens.",
+        "items": { "$ref": "#/StartDeclaration" }
+      },
+      "initial_setup_complete": { "type": "boolean", "description": "As `Install` reads it." },
+      "missing": {
+        "type": "array",
+        "description": "Every input the plan needs and could not resolve, each naming its plan `field`.",
+        "items": { "$ref": "refusals.json#/Diagnostic" }
+      },
+      "gaps": {
+        "type": "array",
+        "description": "Every setup prerequisite the plan's path lacks, in repair order, then every existing declaration the plan would change.",
+        "items": { "$ref": "refusals.json#/Diagnostic" }
+      },
+      "warnings": { "type": "array", "items": { "$ref": "refusals.json#/Diagnostic" } },
+      "unavailable": { "type": "array", "items": { "$ref": "refusals.json#/Diagnostic" } }
+    },
+    "required": [
+      "outcome", "organization", "project", "repositories", "branch", "agent", "harness", "model",
+      "profile", "sign_in_method", "sign_in", "saved", "declarations", "initial_setup_complete",
+      "missing", "gaps", "warnings", "unavailable"
+    ]
+  },
+  "StartValue": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "value": { "type": ["string", "null"] },
+      "source": { "$ref": "#/StartSource" },
+      "record": { "type": ["string", "null"], "description": "The declared record the value was read from, where it was read from one." }
+    },
+    "required": ["value", "source", "record"]
+  },
+  "StartRepositories": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "value": { "type": "array", "items": { "$ref": "organizations.json#/ResolvedRepository" } },
+      "source": { "$ref": "#/StartSource" },
+      "record": { "type": ["string", "null"] }
+    },
+    "required": ["value", "source", "record"]
+  },
+  "StartSource": {
+    "type": "string",
+    "enum": [
+      "given", "clone_origin", "clone_default_branch", "clone_checked_out", "only_organization",
+      "project", "only_agent", "agent", "named_for_repository", "named_for_harness",
+      "saved_sign_in", "operator_profile", "default"
+    ],
+    "description": "Where a value came from. `project` and `agent` name the declared record in `record`; `clone_origin` is a Project found declaring the clone's origin when `record` names one."
+  },
+  "StartDeclaration": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "kind": { "type": "string", "enum": ["organization", "project", "agent", "provider_credential", "workspace"] },
+      "name": { "type": ["string", "null"], "description": "Null for the Workspace, which is named when it opens." },
+      "action": { "type": "string", "enum": ["declare", "reuse", "hold", "replace", "open"] }
+    },
+    "required": ["kind", "name", "action"]
+  },
+  "Settled": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "created": {
+        "type": "boolean",
+        "description": "Whether the start declared it, rather than finding it declared."
+      }
+    },
+    "required": ["name", "created"]
+  },
+  "Started": {
+    "type": "object",
+    "properties": {
+      "organization": { "$ref": "#/Settled" },
+      "project": { "$ref": "#/Settled" },
+      "agent": { "$ref": "#/Settled" },
+      "workspace": { "$ref": "workspaces.json#/Workspace" },
+      "session": { "$ref": "sessions.json#/Session" },
+      "completed_initial_setup": {
+        "type": "boolean",
+        "description": "Whether this start is the one that completed initial setup."
+      }
+    },
+    "required": ["organization", "project", "agent", "workspace", "session", "completed_initial_setup"]
+  }
+}
