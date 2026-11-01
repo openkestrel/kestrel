@@ -1,9 +1,9 @@
 use jiff::SignedDuration;
 use kestrel::domain::Direction;
 
+use crate::support::Kestrel;
 use crate::support::events::{BOTH, POLL_INTERVAL, REPOSITORY, labelled_ready, polls, watching};
 use crate::support::github_stub::GithubStub;
-use crate::support::Kestrel;
 
 #[tokio::test]
 async fn an_integration_declares_which_directions_it_carries() {

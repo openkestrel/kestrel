@@ -6,9 +6,9 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::Direction;
 
+use crate::support::Kestrel;
 use crate::support::events::{BOTH, labelled_ready, watching};
 use crate::support::github_stub::{GithubStub, INSTALLATION_TOKEN, ScriptedResponse};
-use crate::support::Kestrel;
 
 /// The Delivery log is the App's own, so the poll presents the App's JWT, not an installation token.
 #[tokio::test]
