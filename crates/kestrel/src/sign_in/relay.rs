@@ -125,7 +125,7 @@ pub async fn start(
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
     let profile = match profile {
-        None => super::operator_profile(&mut tx, &organization, harness, true)
+        None => super::profiles::operator_profile(&mut tx, &organization, harness, true)
             .await?
             .expect("declared"),
         Some(profile) => {
@@ -391,7 +391,7 @@ async fn complete(store: &Store, id: &str, material: &str) -> Result<()> {
         tx.relays().update(&mut attempt, progress).await?;
     } else {
         let method = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?;
-        let material = super::structural(method, material)?;
+        let material = super::save::structural(method, material)?;
         let authentication = Authentication {
             state: State::LoginCompleted,
             source: Source::Relay,
@@ -657,7 +657,7 @@ async fn authorize_device(
         .filter(|material| material.len() <= OUTPUT_LIMIT)
         .and_then(|material| String::from_utf8(material).ok())
         .ok_or(unusable)?;
-    super::structural(method, &material).map_err(|_| unusable)?;
+    super::save::structural(method, &material).map_err(|_| unusable)?;
     Ok(Some(material))
 }
 
