@@ -256,6 +256,9 @@ async fn another_installations_deliveries_are_not_this_integrations() {
     kestrel.work_pass().await;
     kestrel.advance(POLL_INTERVAL).await;
 
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].occurrence.subject.as_deref(), Some("#43"));
     assert_eq!(requested(&stub, FETCHED), 1);
 
     kestrel.teardown().await;
