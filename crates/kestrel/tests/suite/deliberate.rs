@@ -57,18 +57,17 @@ async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
 /// More than a stub's scripted events take to be polled and fired, a pass at a time.
 const PASSES: usize = 20;
 
-async fn passed_until<T>(kestrel: &Kestrel, never: &str, done: impl AsyncFn() -> Option<T>) -> T {
+async fn passed_until<T>(kestrel: &Kestrel, failure: &str, done: impl AsyncFn() -> Option<T>) -> T {
     for _ in 0..PASSES {
         kestrel.advance(POLL.unsigned_abs()).await;
         if let Some(done) = done().await {
             return done;
         }
     }
-    panic!("{never} in {PASSES} passes");
+    panic!("{failure} in {PASSES} passes");
 }
 
-/// Long enough for anything still to happen to have happened.
-async fn passes(kestrel: &Kestrel) {
+async fn settled(kestrel: &Kestrel) {
     for _ in 0..PASSES {
         kestrel.advance(POLL.unsigned_abs()).await;
     }
@@ -951,7 +950,7 @@ async fn a_held_delegation_starts_once_its_blocker_closes() {
             .trigger,
         "assigned"
     );
-    passes(&kestrel).await;
+    settled(&kestrel).await;
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
 
     kestrel.teardown().await;
@@ -966,8 +965,7 @@ async fn a_held_delegation_waits_on_a_disabled_integration_and_starts_once_it_is
     delegating(&kestrel, &stub).await;
     passed_until_fired(&kestrel, ASSIGNED, "held").await;
 
-    // A held firing is looked at again only for maintenance after its consideration, and a
-    // manual clock stands still between them unless it is moved.
+    // Maintenance at the instant of a held firing's consideration is not later than it.
     kestrel.advance(POLL.unsigned_abs()).await;
     kestrel.disable_integration("acme", "github").await;
     unblocked(&stub, 43);
@@ -1012,7 +1010,7 @@ async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
             .contains("the integration github is retired")
     );
     unblocked(&stub, 43);
-    passes(&kestrel).await;
+    settled(&kestrel).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
@@ -1068,7 +1066,7 @@ async fn unassigning_a_held_delegation_cancels_it() {
             .unwrap_or_default()
             .contains("no longer delegated")
     );
-    passes(&kestrel).await;
+    settled(&kestrel).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     kestrel.teardown().await;
@@ -1088,7 +1086,7 @@ async fn two_held_delegations_of_one_issue_start_it_once() {
     stub.deliver(github_stub::issue_event(42, "closed", ""));
 
     let opened = passed_until_opened(&kestrel, 1).await;
-    passes(&kestrel).await;
+    settled(&kestrel).await;
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     let mut outcomes = Vec::new();
     for event in kestrel.events("acme").await {
