@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { followChanges } from "./follow";
 import { queueKey, sessionsKey, workspaceSessionsQuery, workspacesQuery } from "./queries";
@@ -6,6 +6,38 @@ import { reservingControlPlane } from "./stream-fake";
 import { TabStream } from "./tab-stream";
 
 describe("an Organization's change notices", () => {
+	it.each(["open", "resync", "change"])(
+		"refresh an initial read already in flight on %s",
+		async (event) => {
+			const client = new QueryClient();
+			const invalidated = vi.spyOn(client, "invalidateQueries");
+			const initial = Promise.withResolvers<string[]>();
+			const read = vi
+				.fn<() => Promise<string[]>>()
+				.mockReturnValueOnce(initial.promise)
+				.mockResolvedValue(["brave-otter"]);
+			const observer = new QueryObserver(client, {
+				queryKey: workspacesQuery("acme").queryKey,
+				queryFn: read,
+			});
+			const stop = observer.subscribe(() => {});
+			const server = reservingControlPlane();
+			const stream = new TabStream(server.operations);
+			try {
+				followChanges(stream, client, "acme");
+				await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+				server.send(server.puts[0]?.id ?? "", event, { resource: "queue" });
+				await vi.waitFor(() => expect(invalidated).toHaveBeenCalled());
+				initial.resolve([]);
+				await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["brave-otter"]));
+			} finally {
+				stream.close();
+				stop();
+				client.clear();
+			}
+		},
+	);
+
 	it("refetch the Organization on every open, and only the named Workspace's reads on a notice", async () => {
 		const client = new QueryClient();
 		const invalidated = vi.spyOn(client, "invalidateQueries");

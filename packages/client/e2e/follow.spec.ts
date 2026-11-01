@@ -65,6 +65,49 @@ test("every tab hears a change through its own stream", async ({ context, reques
 	await expect(second.getByRole("link", { name })).toBeVisible({ timeout: 20_000 });
 });
 
+test("a tab subscribing after a commit replaces its pending older Workspace list", async ({
+	page,
+	context,
+	request,
+}) => {
+	const witness = await context.newPage();
+	const listed = witness.waitForResponse("/operator/organizations/acme/workspaces");
+	await witness.goto("/organizations/acme");
+	await listed;
+	const snapshot = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const subscribe = Promise.withResolvers<void>();
+	let lists = 0;
+	await page.route("/operator/organizations/acme/workspaces", async (route) => {
+		lists += 1;
+		if (lists === 1) {
+			const response = await route.fetch();
+			snapshot.resolve();
+			await release.promise;
+			await route.fulfill({ response });
+			return;
+		}
+		await route.continue();
+	});
+	await page.route("/operator/streams/*/subscriptions/*", async (route) => {
+		await subscribe.promise;
+		await route.continue();
+	});
+	const queue = page.waitForResponse("/operator/organizations/acme/queue");
+	await page.goto("/organizations/acme");
+	await snapshot.promise;
+	await queue;
+	const name = await opened(request);
+	// Hearing the committed change in another tab lets its coalesced notices drain before subscribing.
+	await expect(witness.getByRole("link", { name })).toBeVisible();
+	await witness.close();
+	const refetched = page.waitForRequest("/operator/organizations/acme/queue");
+	subscribe.resolve();
+	await refetched;
+	release.resolve();
+	await expect(page.getByRole("link", { name })).toBeVisible();
+});
+
 // HTTP/1.1 gives an origin six connections: five tabs hold one each and leave one for requests.
 test("five tabs follow their Workspaces over HTTP/1.1, navigate, and still answer requests", async ({
 	context,
