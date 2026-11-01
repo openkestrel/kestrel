@@ -30,6 +30,7 @@ pub mod operator_queue;
 pub mod operator_requests;
 pub mod profile;
 pub mod provider_stub;
+pub mod replies;
 pub mod repository;
 pub mod scripted_agent;
 pub mod sign_in;
