@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { Scripted, visiting } from "./activity";
 import { continuedTranscript, FIRST_SESSION, wire } from "./continued-workspace";
 import { Streamed } from "./streamed";
 
@@ -222,4 +223,73 @@ test("a thought opened inside an Activity renders its Markdown", async ({ page, 
 	await expect(
 		log.getByRole("button", { name: /^Thought, The cap belongs in wait\(\)\./ }),
 	).toHaveAttribute("aria-expanded", "true");
+});
+
+test("a referenced payload loads on demand, and an expired one reads as expired", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const reference = (seq: number) => ({
+		payload_id: `${workspace.id}:${seq}:message`,
+		bytes: 70_000,
+		media_type: "text/plain; charset=utf-8",
+	});
+	const scripted = new Scripted({
+		follow: () =>
+			wire(
+				{
+					name: "entry",
+					id: `${workspace.id}:1`,
+					data: {
+						kind: "shared_state",
+						session_id: null,
+						seq: 1,
+						appended_at: "2026-09-30T10:00:00Z",
+						entry: {
+							type: "said",
+							participant: "jack",
+							message: reference(1),
+							payload_fields: ["message"],
+						},
+					},
+				},
+				{
+					name: "entry",
+					id: `${workspace.id}:2`,
+					data: {
+						kind: "shared_state",
+						session_id: null,
+						seq: 2,
+						appended_at: "2026-09-30T10:00:01Z",
+						entry: {
+							type: "said",
+							participant: "jack",
+							message: reference(2),
+							payload_fields: ["message"],
+						},
+					},
+				},
+				{ name: "end", data: { because: "sealed" } },
+			),
+		payload: (id) =>
+			id.endsWith(":1:message")
+				? { status: 200, body: "the whole story" }
+				: { status: 410, body: "expired" },
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const first = page.locator('[data-seq="1"]').getByRole("button", { name: "Load 68 KiB payload" });
+	const second = page
+		.locator('[data-seq="2"]')
+		.getByRole("button", { name: "Load 68 KiB payload" });
+	await expect(first).toBeVisible();
+	await expect(second).toBeVisible();
+
+	await first.click();
+	await expect(page.getByText("the whole story")).toBeVisible();
+
+	await second.click();
+	await expect(page.getByText("expired")).toBeVisible();
 });
