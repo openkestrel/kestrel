@@ -1,7 +1,8 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 // Registering a GitHub Integration asks GitHub, so its record and maintenance writes are stubbed.
-const ORGANIZATION = "upkeep";
+// The shared control plane's other suites expect acme alone, so this one declares nothing else.
+const ORGANIZATION = "acme";
 const INTEGRATIONS = `/operator/organizations/${ORGANIZATION}/integrations`;
 const SETTINGS = `/organizations/${ORGANIZATION}/settings/repositories`;
 
@@ -13,7 +14,7 @@ function github(patch: Record<string, unknown> = {}) {
 		id: "00000000-0000-0000-0000-0000000000aa",
 		name: "github",
 		kind: "github",
-		repository: "upkeep/repo",
+		repository: "acme/repo",
 		bot_login: "kestrel-example[bot]",
 		carries: ["inbound", "outbound"],
 		state: "enabled",
@@ -33,10 +34,10 @@ function github(patch: Record<string, unknown> = {}) {
 const project = {
 	id: "00000000-0000-0000-0000-0000000000bb",
 	name: "repo",
-	repositories: ["https://github.com/upkeep/repo.git"],
+	repositories: ["https://github.com/acme/repo.git"],
 	integrations: [
 		{
-			repository: "https://github.com/upkeep/repo.git",
+			repository: "https://github.com/acme/repo.git",
 			integration: "github",
 			integration_id: "00000000-0000-0000-0000-0000000000aa",
 		},
@@ -158,7 +159,7 @@ test("pausing shows what waits before it is confirmed, and resuming carries on",
 	await page.goto(SETTINGS);
 	await expect(card(page).locator("[data-lifecycle-state]")).toHaveText("In use");
 	await expect(card(page).locator("[data-lifecycle]")).toContainText(
-		"Carries inbound and outbound for upkeep/repo in upkeep",
+		"Carries inbound and outbound for acme/repo in acme",
 	);
 
 	await card(page).getByRole("button", { name: "Pause…" }).click();
@@ -232,7 +233,7 @@ test("a rejected key keeps the current one, and a shared App's hook is the produ
 	await page.goto(SETTINGS);
 	await card(page).getByRole("button", { name: "Replace the App private key…" }).click();
 	const form = card(page).locator("[data-key-replacement]");
-	await expect(form.locator("[data-consequence]")).toContainText("reach upkeep/repo");
+	await expect(form.locator("[data-consequence]")).toContainText("reach acme/repo");
 	const key = form.getByLabel("Replacement private key");
 	await expect(key).toHaveAttribute("type", "file");
 	await key.setInputFiles({
