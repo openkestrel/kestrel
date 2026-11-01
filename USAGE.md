@@ -135,3 +135,40 @@ A session does not end just because the agent answered or opened a pull request.
 ## Current limits
 
 Kestrel can report a GitHub triggered session back to its issue. Generic webhooks and schedules have no return channel yet. A session that starts and fails stays failed; Kestrel retries dispatch, not the agent's work. Live collaboration in a workspace is still planned. See [the roadmap](ROADMAP.md) for the implementation sequence.
+
+## Shell completions
+
+Install dynamic completion for the `kestrel` on your PATH. Regenerate the integration after
+upgrading kestrel, because its pinned completion engine's shell protocol may change.
+
+For bash, add this to `~/.bashrc`:
+
+```bash
+eval "$(kestrel completions bash)"
+```
+
+For zsh, add this after `compinit` in `~/.zshrc`:
+
+```zsh
+autoload -Uz compinit
+compinit
+eval "$(kestrel completions zsh)"
+```
+
+For fish, install a completion file:
+
+```fish
+mkdir -p ~/.config/fish/completions
+kestrel completions fish > ~/.config/fish/completions/kestrel.fish
+```
+
+Restart the shell or source its configuration. In each shell, try `kestrel sta<TAB>`,
+`kestrel workspace show <TAB>`, `kestrel workspace open --agent <TAB>`,
+`kestrel workspace open --profile <TAB>`, or `kestrel login claude --method <TAB>`.
+Command and flag suggestions work offline. Workspace, Agent, Profile, harness and Sign-in
+Method suggestions read non-secret names from the selected control plane, using `--control-plane`
+and `--organization` on the line being completed before environment variables, a repository's
+`.kestrel/organization` binding and the sole Organization. Methods belong to the selected harness
+(or the selected Agent's or Workspace's harness). Remote reads share an 800 ms budget; unavailable,
+ambiguous or incomplete scope silently produces no names. Completion never runs the command,
+starts a relay, tests a sign-in or saves anything.

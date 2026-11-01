@@ -52,6 +52,13 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   writes the record the Client composes from several reads, and `exit-codes` writes the catalog.
   Raw content has nothing to filter: a `204` has no answer to filter, and `--jq` on `workspace
   read`'s raw bytes is refused rather than inventing a record.
+- **Completions** (`completion.rs`): `kestrel completions bash|zsh|fish` emits shell integration
+  for the pinned `clap_complete` dynamic engine. Dispatch runs before the normal runtime and
+  command path. Callbacks reparse the line's flags, reuse scope derivation, and read only
+  Workspace, Agent, Profile and harness catalogue names through generated wire types. Method
+  candidates use the selected harness, Agent or Workspace's latest Session (then its opening
+  Agent). All reads share an 800 ms deadline; failures are silent and runtime shutdown does not
+  wait on outstanding DNS workers. Installation and examples are in [USAGE.md](../../USAGE.md#shell-completions).
 - **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
   Failure to disable echo refuses input. `profile set` reads and validates input before declaring
   an absent Profile, defaults its ownership to the stable Operator, and uses an explicit
