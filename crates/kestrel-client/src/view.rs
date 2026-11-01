@@ -644,6 +644,14 @@ fn option_summary(options: &[wire::SessionOption]) -> String {
         .join("\n")
 }
 
+fn counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .map(|(state, count)| format!("{state}: {count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -693,12 +701,4 @@ mod tests {
         }));
         assert_eq!(said(&ignored), format!("ignored\t-\t-\t{EVENT}\tissue-1\n"));
     }
-}
-
-fn counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
-    counts
-        .iter()
-        .map(|(state, count)| format!("{state}: {count}"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
