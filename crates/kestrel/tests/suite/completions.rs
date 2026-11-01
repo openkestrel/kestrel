@@ -145,6 +145,24 @@ async fn names_follow_scope_precedence_and_selected_harness_in_every_shell() {
         .declare(&kestrel)
         .await;
     for shell in ["bash", "zsh", "fish"] {
+        for line in [
+            vec!["kestrel", "--organization", "absent", "login", ""],
+            vec![
+                "kestrel",
+                "--organization=absent",
+                "login",
+                "claude",
+                "--method",
+                "",
+            ],
+        ] {
+            let result = complete(&kestrel, shell, &line, Invocation::default()).await;
+            assert!(
+                !result.out.iter().any(|item| item.contains("claude")),
+                "unavailable scope: {:?}",
+                result.out
+            );
+        }
         let line = ["kestrel", "workspace", "open", "--agent", ""];
         let ambiguous = complete(&kestrel, shell, &line, Invocation::default()).await;
         assert!(ambiguous.out.is_empty(), "{:?}", ambiguous.out);

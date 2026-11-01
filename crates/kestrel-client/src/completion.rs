@@ -149,7 +149,16 @@ impl Selection {
             organization,
             source: Source::Flag,
         });
-        let organization = Scoping::new(&api, named).resolve().await?.organization;
+        let scope = Scoping::new(&api, named).resolve().await?;
+        if matches!(names, Names::Harness | Names::Method)
+            && !matches!(scope.source, Source::OnlyOrganization)
+            && !crate::scope::organizations(&api)
+                .await?
+                .contains(&scope.organization)
+        {
+            return Ok(Vec::new());
+        }
+        let organization = scope.organization;
         let path = ["organizations", &organization];
         Ok(match names {
             Names::Workspace => api
