@@ -26,6 +26,8 @@ pub mod lineage;
 pub mod link_client;
 pub mod model;
 pub mod operator_log;
+pub mod operator_queue;
+pub mod operator_requests;
 pub mod profile;
 pub mod provider_stub;
 pub mod repository;

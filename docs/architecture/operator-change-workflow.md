@@ -40,7 +40,7 @@ Add a path to the index in the root, and a schema to the area file whose paths u
 Update these alongside the document and `operator::router` in `crates/kestrel/src/operator.rs`:
 
 - The explicit `served` inventory in
-  `crates/kestrel/tests/suite/operator.rs::the_published_operator_document_describes_the_boundary_the_control_plane_serves`.
+  `crates/kestrel/tests/suite/operator_boundary.rs::the_published_operator_document_describes_the_boundary_the_control_plane_serves`.
   This independent pin must agree with the published paths and methods.
 - The `operator::operation` mapping in `crates/kestrel/src/operator.rs`, which supplies the
   documented operation ID to diagnostics.
@@ -48,7 +48,7 @@ Update these alongside the document and `operator::router` in `crates/kestrel/sr
 Run the two existing focused checks after the coherent change:
 
 ```sh
-cargo test -p kestrel --test suite operator::the_published_operator_document_describes_the_boundary_the_control_plane_serves
+cargo test -p kestrel --test suite operator_boundary::the_published_operator_document_describes_the_boundary_the_control_plane_serves
 cargo test -p kestrel --lib operator::tests::every_route_is_diagnosed_under_the_operation_it_is_documented_as
 ```
 
