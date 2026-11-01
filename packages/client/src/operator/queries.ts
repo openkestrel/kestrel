@@ -1,4 +1,4 @@
-import { type QueryClient, queryOptions } from "@tanstack/react-query";
+import { type QueryClient, type QueryFilters, queryOptions } from "@tanstack/react-query";
 import type {
 	Change,
 	Organization,
@@ -111,10 +111,16 @@ export const transcriptPayloadQuery = (organization: string, workspace: string, 
 	});
 
 export function refetchOrganization(client: QueryClient, organization: string): Promise<void> {
-	return client.invalidateQueries({
+	return refetch(client, {
 		queryKey: organizationsQuery.queryKey,
 		predicate: ({ queryKey }) => queryKey.length === 1 || queryKey[1] === organization,
 	});
+}
+
+async function refetch(client: QueryClient, filters: QueryFilters): Promise<void> {
+	// Invalidation alone reuses an initial pending read, whose snapshot can predate the notice.
+	await client.cancelQueries(filters);
+	await client.invalidateQueries(filters);
 }
 
 // The Workspace list carries each latest Session and its queue standing, so every notice refetches it.
@@ -123,7 +129,7 @@ export async function refetchNoticed(
 	organization: string,
 	change: Change,
 ): Promise<void> {
-	const list = client.invalidateQueries({
+	const list = refetch(client, {
 		queryKey: workspacesQuery(organization).queryKey,
 		exact: true,
 	});
@@ -131,19 +137,19 @@ export async function refetchNoticed(
 		case "workspace":
 			await Promise.all([
 				list,
-				client.invalidateQueries({ queryKey: workspaceKey(organization, change.workspace) }),
+				refetch(client, { queryKey: workspaceKey(organization, change.workspace) }),
 			]);
 			return;
 		case "session":
 			await Promise.all([
 				list,
-				client.invalidateQueries({ queryKey: [...sessionsKey(organization), change.id] }),
-				client.invalidateQueries({
+				refetch(client, { queryKey: [...sessionsKey(organization), change.id] }),
+				refetch(client, {
 					queryKey: workspaceSessionsQuery(organization, change.workspace).queryKey,
 				}),
 			]);
 			return;
 		case "queue":
-			await Promise.all([list, client.invalidateQueries({ queryKey: queueKey(organization) })]);
+			await Promise.all([list, refetch(client, { queryKey: queueKey(organization) })]);
 	}
 }
